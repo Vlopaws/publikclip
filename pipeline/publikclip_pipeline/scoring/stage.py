@@ -167,7 +167,9 @@ class ScoreStage(Stage):
         finalists = scored[:SELECT_COUNT]
 
         # T2 visual pass + music brief on finalists only.
-        supports_vision = client.backend == "gemini"
+        # Capability, not identity: any multimodal backend gets the T2
+        # frame pass, and one that lacks it degrades into signals_missing.
+        supports_vision = client.supports_vision
         for j, entry in enumerate(finalists):
             ctx.emit(0.6 + j / max(1, len(finalists)) * 0.35, f"Visual pass {j + 1}/{len(finalists)}…")
             visual = None
@@ -208,7 +210,7 @@ class ScoreStage(Stage):
             )
             entry["signals_fired"] = fired
             entry["signals_missing"] = missing
-            entry["confidence"] = "standard" if client.backend == "gemini" else "local-estimate"
+            entry["confidence"] = client.confidence
 
             prior_mood = music_brief.mood_prior(window_events, entry["arousal_pct"])
             try:
@@ -229,6 +231,7 @@ class ScoreStage(Stage):
         return {
             "llm_mode": llm_mode,
             "model": client.model,
+            "confidence": client.confidence,
             "clips": finalists,
             "scored_count": len(scored),
             "t2_ran": supports_vision,

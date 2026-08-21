@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import llm
+
 # --- T1 structured-output schema (Gemini responseSchema / Ollama format) ---
 
 T1_SCHEMA: dict[str, Any] = {
@@ -72,8 +74,9 @@ def t1_prompt(transcript_text: str, context: dict) -> str:
     return (
         "You are rating a candidate short-form clip cut from a longer video. "
         "Rate ONLY what is in this transcript — do not assume missing context makes it better.\n\n"
+        f"{llm.FENCE_NOTICE}\n\n"
         f"Speakers and transcript ({context.get('duration', 0):.0f} seconds):\n"
-        f"{transcript_text}\n\n"
+        f"{llm.fenced('transcript', transcript_text)}\n\n"
         f"Audio events detected in this span: {events_desc}\n\n"
         "Score each dimension honestly. Most clips are mediocre; 8+ on any "
         "dimension should be rare. hook rates ONLY the first ~3 seconds. "

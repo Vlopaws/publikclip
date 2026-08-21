@@ -20,6 +20,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .. import config
+from ..integrity import IntegrityError, digest_from_manifest, verify
 
 _KEG_CANDIDATES = [
     "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
@@ -34,10 +35,18 @@ _STATIC_BASE = "https://ffmpeg.martin-riedl.de/redirect/latest/macos/{arch}/rele
 # Static Windows build with libass: BtbN's GPL build ships ffmpeg.exe and
 # ffprobe.exe (with the subtitles filter) in one zip under a stable
 # latest-release URL. ~80 MB once, into PUBLIKCLIP_HOME/bin.
-_STATIC_WINDOWS = (
-    "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/"
-    "ffmpeg-master-latest-win64-gpl.zip"
-)
+_WINDOWS_RELEASE_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download"
+_WINDOWS_ZIP = "ffmpeg-master-latest-win64-gpl.zip"
+_STATIC_WINDOWS = f"{_WINDOWS_RELEASE_BASE}/{_WINDOWS_ZIP}"
+
+# BtbN ships a coreutils-style checksums.sha256 with every release; the zip
+# is verified against it before anything is unpacked and executed. The macOS
+# source publishes no digest at all (checked: no sidecar, no API) — see
+# _ensure_capable_macos for what is done instead and what stays uncovered.
+_WINDOWS_SUMS = f"{_WINDOWS_RELEASE_BASE}/checksums.sha256"
+
+# Mach-O magics: 64-bit little-endian and the universal/fat wrappers.
+_MACHO_MAGICS = (bytes.fromhex("cffaedfe"), bytes.fromhex("cafebabe"), bytes.fromhex("bebafeca"))
 
 _EXE = ".exe" if platform.system() == "Windows" else ""
 
@@ -96,7 +105,11 @@ def supports_captions() -> bool:
     return resolve()[1]
 
 
-def _download(url: str, dest: Path) -> bool:
+def _download(url: str, dest: Path, sha256: str | None = None) -> bool:
+    """Fetch `url` to `dest`. With `sha256`, the file is discarded and False
+    returned unless it matches — callers treat False as "no capable ffmpeg",
+    which degrades to rendering without burned captions rather than running
+    an unverified binary."""
     import httpx
 
     try:
@@ -106,12 +119,46 @@ def _download(url: str, dest: Path) -> bool:
             with open(dest, "wb") as fh:
                 for chunk in res.iter_bytes():
                     fh.write(chunk)
-        return True
     except (httpx.HTTPError, OSError):
+        return False
+    if sha256:
+        try:
+            verify(dest, sha256, dest.name)
+        except (IntegrityError, OSError):
+            return False
+    return True
+
+
+def _published_digest(sums_url: str, filename: str) -> str | None:
+    """The digest the publisher lists for `filename`, or None if the
+    manifest is unreachable or silent about it."""
+    import httpx
+
+    try:
+        res = httpx.get(sums_url, follow_redirects=True, timeout=60.0)
+        res.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return digest_from_manifest(res.text, filename)
+
+
+def _looks_like_macho(path: Path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) in _MACHO_MAGICS
+    except OSError:
         return False
 
 
 def _ensure_capable_macos(progress) -> bool:
+    """ffmpeg.martin-riedl.de publishes no checksum manifest, so there is no
+    publisher digest to pin against — the honest state of this path is:
+    HTTPS (host + transport authenticated), a well-formed zip, a real Mach-O
+    payload, and the `-filters` capability probe before it is used. That
+    rules out corruption and a wrong-file swap, but NOT a compromise of the
+    build host itself. Windows takes the verified path below; if this
+    upstream ever ships digests, route it through `_published_digest` too.
+    """
     arch = "arm64" if platform.machine() == "arm64" else "amd64"
     for tool in ("ffmpeg", "ffprobe"):
         dest = config.bin_dir() / tool
@@ -128,6 +175,9 @@ def _ensure_capable_macos(progress) -> bool:
                     if name.rstrip("/").endswith(tool):
                         dest.write_bytes(zf.read(name))
                         break
+            if not _looks_like_macho(dest):
+                dest.unlink(missing_ok=True)
+                return False
             dest.chmod(0o755)
         except (OSError, zipfile.BadZipFile):
             return False
@@ -149,8 +199,11 @@ def _ensure_capable_windows(progress) -> bool:
     if progress:
         progress(-1, "Downloading ffmpeg (one-time, caption support)…")
     zpath = config.bin_dir() / "ffmpeg-static.zip"
+    expected = _published_digest(_WINDOWS_SUMS, _WINDOWS_ZIP)
+    if not expected:
+        return False  # no manifest, no trust — degrade instead of guessing
     try:
-        if not _download(_STATIC_WINDOWS, zpath):
+        if not _download(_STATIC_WINDOWS, zpath, sha256=expected):
             return False
         with zipfile.ZipFile(zpath) as zf:
             for name in zf.namelist():

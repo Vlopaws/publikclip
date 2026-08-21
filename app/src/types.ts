@@ -64,7 +64,15 @@ export interface JobResults {
     heatmap: unknown[] | null
     probe: { duration_sec: number; width: number; height: number }
   } | null
-  score: { clips: Clip[]; llm_mode: string; model: string; scored_count: number } | null
+  score: {
+    clips: Clip[]
+    llm_mode: string
+    model: string
+    scored_count: number
+    /** How far to trust the judgment: the scoring stage records what
+     * the backend reported, rather than the UI re-deriving it. */
+    confidence?: string
+  } | null
   render: { outputs: RenderOutput[]; emoji_ok: boolean; caption_preset: string } | null
   events: { counts: Record<string, number>; timeline: unknown[]; arousal_source: string } | null
   candidates: { count: number; effective_weights: Record<string, number>; heatmap_present: boolean } | null
@@ -79,6 +87,8 @@ export interface JobSummary {
 
 export interface SetupState {
   has_gemini_key: boolean
+  /** secrets.json field -> whether a value is stored. */
+  keys?: Record<string, boolean>
   onboarded: boolean
 }
 

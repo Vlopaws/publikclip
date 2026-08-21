@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..scoring import llm
+
 MUSIC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -69,8 +71,11 @@ def music_prompt(summary: str, transcript_excerpt: str, prior: str, events_desc:
         "Suggest background music for a short-form vertical clip. Emit the "
         "structured brief only — the user edits these fields, so keep each "
         "field short and concrete.\n\n"
-        f"What happens: {summary}\n"
-        f"Transcript excerpt: {transcript_excerpt[:600]}\n"
+        f"{llm.FENCE_NOTICE}\n\n"
+        # `summary` is our own T1 output, but it is free text carried over
+        # from the same third-party transcript — fence it as second-order.
+        f"What happens: {llm.fenced('summary', summary)}\n"
+        f"Transcript excerpt: {llm.fenced('transcript', transcript_excerpt[:600])}\n"
         f"Audio events: {events_desc}\n"
         f"Signal-derived mood prior (trust this over your own read of the text): {prior}\n\n"
         "Rules: genre must be a real, searchable music genre. bpm_range must "

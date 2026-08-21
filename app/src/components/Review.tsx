@@ -44,6 +44,16 @@ function fmtTime(t: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/** The scoring stage records a confidence label per run; older jobs
+ * predate the field, so fall back to what llm_mode implied then. */
+function confidenceLabel(score: { confidence?: string; llm_mode?: string } | null): string {
+  const value = score?.confidence ?? (score?.llm_mode === 'ollama' ? 'local-estimate' : 'standard')
+  if (value === 'standard') return 'standard confidence'
+  if (value === 'local-estimate') return 'LOCAL ESTIMATE'
+  if (value === 'third-party') return 'THIRD-PARTY MODEL'
+  return value.toUpperCase()
+}
+
 export default function Review({ results, onBack, onRestyle }: Props) {
   const outputs = results.render?.outputs ?? []
   const clips = results.score?.clips ?? []
@@ -96,7 +106,7 @@ export default function Review({ results, onBack, onRestyle }: Props) {
           <h1 className="review-title">{results.ingest?.title ?? results.job_id}</h1>
           <p className="review-sub mono">
             {outputs.length} clips · scored by {results.score?.model ?? '—'} ·{' '}
-            {results.score?.llm_mode === 'ollama' ? 'LOCAL ESTIMATE' : 'standard confidence'} ·{' '}
+            {confidenceLabel(results.score)} ·{' '}
             {results.candidates?.heatmap_present ? 'replay heatmap in play' : 'no public heatmap'}
           </p>
         </div>

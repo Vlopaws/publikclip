@@ -1,14 +1,23 @@
 """Model weight registry + downloader.
 
 All weights land in PUBLIKCLIP_HOME/models/<name>. Downloads resume (Range)
-and verify sha256 when one is pinned. The registry grows per milestone —
-M1 adds the audio models, M3 the vision ONNX models. Entries with a
-sha256 of None are verified by size-only until first release pinning.
+and every entry carries a pinned sha256 — `ModelSpec.sha256` has no default,
+so a model physically cannot be registered without one. This matters more
+than a corruption check: a .pth is a pickle and onnxruntime loads whatever
+graph it is handed, so an unverified weight file is arbitrary code
+execution, not a bad score.
+
+Verification runs on every use, not just on download. A digest recorded
+beside the file would prove nothing (whoever can rewrite the weights can
+rewrite the record), and the `dest.exists()` fast path would otherwise trust
+forever anything already on disk — including weights fetched by an older
+build that verified nothing at all. Re-hashing the full model set costs
+~0.3 s against a job measured in minutes; the result is memoised per process
+so a stage that asks twice pays once.
 """
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -16,6 +25,7 @@ from typing import Callable
 import httpx
 
 from .. import config
+from ..integrity import verify
 
 ProgressFn = Callable[[float, str], None]
 
@@ -25,11 +35,14 @@ class ModelSpec:
     name: str            # registry key + subdir name
     filename: str
     url: str
-    sha256: str | None = None
+    sha256: str          # required: see module docstring
     approx_mb: int = 0
 
 
 REGISTRY: dict[str, ModelSpec] = {}
+
+# (path, sha256) pairs already verified in this process.
+_verified: set[tuple[str, str]] = set()
 
 
 def register(spec: ModelSpec) -> ModelSpec:
@@ -45,10 +58,26 @@ def is_present(spec: ModelSpec) -> bool:
     return model_path(spec).exists()
 
 
+def _check(path: Path, spec: ModelSpec, progress: ProgressFn | None = None) -> None:
+    """Verify unless this exact (path, digest) already passed this process.
+
+    On mismatch `verify` deletes the file, so the next call re-downloads
+    rather than failing forever on a bad copy.
+    """
+    key = (str(path), spec.sha256)
+    if key in _verified:
+        return
+    if progress and spec.approx_mb >= 100:
+        progress(-1, f"Verifying {spec.name}…")
+    verify(path, spec.sha256, spec.name)
+    _verified.add(key)
+
+
 def ensure(spec: ModelSpec, progress: ProgressFn) -> Path:
-    """Download with resume; verify sha256 when pinned."""
+    """Download with resume if needed; always verify before returning."""
     dest = model_path(spec)
     if dest.exists():
+        _check(dest, spec, progress)
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -71,15 +100,7 @@ def ensure(spec: ModelSpec, progress: ProgressFn) -> Path:
                 seen += len(chunk)
                 if total:
                     progress(seen / total, label)
-    if spec.sha256:
-        digest = hashlib.sha256()
-        with open(tmp, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                digest.update(block)
-        if digest.hexdigest() != spec.sha256:
-            tmp.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"Checksum mismatch for {spec.name} — download corrupted, please retry."
-            )
+    verify(tmp, spec.sha256, spec.name)   # nothing reaches dest unverified
     tmp.replace(dest)
+    _verified.add((str(dest), spec.sha256))
     return dest

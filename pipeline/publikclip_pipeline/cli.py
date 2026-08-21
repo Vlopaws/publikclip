@@ -13,6 +13,10 @@ import sys
 
 from . import config
 from .jobs import queue
+# Cheap import (httpx + config only) — safe at module level next to the
+# deferred stage imports below, and argparse needs the mode list at
+# parser-build time.
+from .scoring import llm as llm_mod
 
 
 def _stages() -> list[queue.Stage]:
@@ -284,14 +288,14 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="process a YouTube URL or local video file")
     p_run.add_argument("source")
-    p_run.add_argument("--llm", choices=["gemini", "ollama"], default=None)
+    p_run.add_argument("--llm", choices=llm_mod.available_modes(), default=None)
     p_run.add_argument("--captions", default=None, help="caption preset name")
     p_run.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
     p_resume.add_argument("job_id")
-    p_resume.add_argument("--llm", choices=["gemini", "ollama"], default=None)
+    p_resume.add_argument("--llm", choices=llm_mod.available_modes(), default=None)
     p_resume.add_argument("--captions", default=None, help="caption preset name")
     p_resume.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
     p_resume.set_defaults(fn=cmd_resume)

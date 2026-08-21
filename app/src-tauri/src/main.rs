@@ -26,6 +26,43 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Absolute path to the OS-owned curl, or None when it is not there.
+///
+/// `Command::new("curl")` resolves through the application's own directory
+/// before PATH on Windows, so a `curl.exe` dropped beside the installed app
+/// (or planted earlier on PATH) would run instead of the real one. Anything
+/// the app launches on its own initiative takes the system copy or nothing.
+fn system_curl() -> Option<PathBuf> {
+    let candidate = if cfg!(windows) {
+        PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| String::from("C:/Windows")))
+            .join("System32")
+            .join("curl.exe")
+    } else {
+        PathBuf::from("/usr/bin/curl")
+    };
+    candidate.exists().then_some(candidate)
+}
+
+/// Subcommands the UI may reach through the generic `edit_tool` / `ig_tool`
+/// bridges, which forward a caller-supplied argv to the pipeline CLI.
+///
+/// No shell is involved, so this is not about shell injection — it is about
+/// not handing the whole CLI surface to whatever executes in the webview,
+/// and about new subcommands being opt-in rather than exposed the moment
+/// they are added. `ig connect` is excluded deliberately: it takes a Meta
+/// app secret and has its own command with its own handling.
+const EDIT_SUBCOMMANDS: &[&str] = &["context", "suggest-visuals"];
+const IG_SUBCOMMANDS: &[&str] =
+    &["sync", "overview", "media", "link", "unlink", "reject", "pull", "report"];
+
+fn checked_subcommand(args: &[String], allowed: &[&str], tool: &str) -> Result<(), String> {
+    match args.first() {
+        Some(sub) if allowed.contains(&sub.as_str()) => Ok(()),
+        Some(sub) => Err(format!("{tool}: subcommand `{sub}` is not allowed")),
+        None => Err(format!("{tool}: no subcommand given")),
+    }
+}
+
 /// Command that never flashes a console window on Windows (CREATE_NO_WINDOW).
 /// Every pipeline/tool spawn goes through this — a GUI app popping cmd.exe
 /// windows for each sidecar call reads as malware to most people.
@@ -219,8 +256,18 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-#[tauri::command]
-fn save_gemini_key(key: String) -> Result<bool, String> {
+/// Persist one field into PUBLIKCLIP_HOME/secrets.json.
+///
+/// Both API keys go through here so the owner-only tightening cannot be
+/// applied to one and forgotten on the other — which is exactly what had
+/// happened: the Gemini key was chmod'ed 0600 and the Pexels key, written by
+/// a near-copy of this function, was left at the process umask.
+///
+/// Windows deliberately keeps the inherited profile ACL (SYSTEM,
+/// Administrators, the owning user — no other standard user). Rewriting it
+/// with icacls would buy nothing an administrator could not undo anyway,
+/// while risking locking the owner out of their own key.
+fn write_secret(field: &str, value: &str) -> Result<bool, String> {
     let home = home_dir();
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let path = home.join("secrets.json");
@@ -228,7 +275,7 @@ fn save_gemini_key(key: String) -> Result<bool, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| json!({}));
-    current["gemini_api_key"] = json!(key.trim());
+    current[field] = json!(value.trim());
     fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -239,15 +286,55 @@ fn save_gemini_key(key: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn save_gemini_key(key: String) -> Result<bool, String> {
+    write_secret("gemini_api_key", &key)
+}
+
+/// Secret fields the UI is allowed to write.
+///
+/// An allowlist for a sharper reason than the tool bridges have one:
+/// secrets.json also carries `llm_base_url`, which the pipeline POSTs every
+/// prompt to. A webview able to name arbitrary fields could point the whole
+/// scoring stage — transcripts included — at a host of its choosing. Custom
+/// endpoints stay env-var or hand-edited on purpose.
+const WRITABLE_SECRETS: &[&str] = &[
+    "gemini_api_key",
+    "pexels_api_key",
+    "nvidia_api_key",
+    "openrouter_api_key",
+    "openai_api_key",
+    "groq_api_key",
+];
+
+#[tauri::command]
+fn save_provider_key(field: String, key: String) -> Result<bool, String> {
+    if !WRITABLE_SECRETS.contains(&field.as_str()) {
+        return Err(format!("`{field}` is not a UI-writable secret"));
+    }
+    write_secret(&field, &key)
+}
+
+#[tauri::command]
 fn get_setup_state() -> Result<Value, String> {
-    let secrets = home_dir().join("secrets.json");
-    let has_key = fs::read_to_string(&secrets)
+    let stored: Value = fs::read_to_string(home_dir().join("secrets.json"))
         .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .map(|v| v["gemini_api_key"].as_str().map(|k| !k.is_empty()).unwrap_or(false))
-        .unwrap_or(false);
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| json!({}));
+    let has = |field: &str| {
+        stored[field].as_str().map(|k| !k.trim().is_empty()).unwrap_or(false)
+    };
+    // Which brains are actually usable, so the picker can say so rather than
+    // letting the user start an hour-long job that dies on the first call.
+    let mut keys = serde_json::Map::new();
+    for field in WRITABLE_SECRETS {
+        keys.insert((*field).to_string(), json!(has(field)));
+    }
     let onboarded = home_dir().join("onboarded").exists();
-    Ok(json!({"has_gemini_key": has_key, "onboarded": onboarded}))
+    Ok(json!({
+        "has_gemini_key": has("gemini_api_key"),
+        "onboarded": onboarded,
+        "keys": Value::Object(keys),
+    }))
 }
 
 #[tauri::command]
@@ -259,7 +346,10 @@ fn mark_onboarded() -> Result<(), String> {
 
 #[tauri::command]
 async fn check_ollama() -> Result<Value, String> {
-    let out = quiet_command("curl")
+    let Some(curl) = system_curl() else {
+        return Ok(json!({"running": false, "models": []}));
+    };
+    let out = quiet_command(&curl.to_string_lossy())
         .args(["-s", "-m", "3", "http://localhost:11434/api/tags"])
         .output()
         .map_err(|e| e.to_string())?;
@@ -279,6 +369,7 @@ async fn check_ollama() -> Result<Value, String> {
 /// instead so progress streams.
 #[tauri::command]
 async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
+    checked_subcommand(&args, EDIT_SUBCOMMANDS, "edit")?;
     let (program, base_args) = pipeline_invocation();
     let mut full = base_args;
     full.push("edit".to_string());
@@ -332,20 +423,6 @@ fn save_clip_edits(job_id: String, edits: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_pexels_key(key: String) -> Result<bool, String> {
-    let home = home_dir();
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    let path = home.join("secrets.json");
-    let mut current: Value = fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({}));
-    current["pexels_api_key"] = json!(key.trim());
-    fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-#[tauri::command]
 fn ig_status() -> Result<Value, String> {
     let path = home_dir().join("instagram.json");
     let connected = fs::read_to_string(&path)
@@ -390,6 +467,7 @@ async fn ig_connect(app_id: String, app_secret: String) -> Result<String, String
 /// (sync / overview / link / unlink / reject — same contract as edit_tool).
 #[tauri::command]
 async fn ig_tool(args: Vec<String>) -> Result<Value, String> {
+    checked_subcommand(&args, IG_SUBCOMMANDS, "ig")?;
     let (program, base_args) = pipeline_invocation();
     let mut full = base_args;
     full.push("ig".to_string());
@@ -447,6 +525,7 @@ fn main() {
             job_results,
             list_job_dirs,
             save_gemini_key,
+            save_provider_key,
             get_setup_state,
             mark_onboarded,
             check_ollama,
@@ -456,7 +535,6 @@ fn main() {
             edit_tool,
             run_edit_render,
             save_clip_edits,
-            save_pexels_key,
             export_clip
         ])
         .setup(|app| {

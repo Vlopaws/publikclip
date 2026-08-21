@@ -19,9 +19,62 @@ horizontal video file and produces vertical 9:16 clips with:
 
 Every model — speech recognition, forced alignment, diarization, laughter
 detection, audio tagging, face detection, active-speaker detection — runs
-locally. The only network calls are the video download and 2–3 small LLM calls
-(bring your own Gemini key, or run fully local via Ollama at reduced scoring
-quality).
+locally. The network is used for the video download, the one-time model-weight
+fetch, and the scoring/music LLM calls (roughly 60 for an hour-long source,
+each cached on its prompt so a re-run spends nothing).
+
+**The scoring backend is yours to choose** — see below.
+
+## Scoring backends
+
+`--llm <mode>`, or the **brain** picker in the app. All of them get the same
+rubric, the same JSON schema, and the same cross-validation against local
+detectors; what differs is judgment quality, price, and whether the model can
+look at video frames.
+
+| mode | what it is | frames? | key |
+|---|---|---|---|
+| `gemini` | what the rubric was tuned against | yes | `aistudio.google.com` |
+| `nvidia` | open models on NVIDIA-hosted GPUs, free tier needs no card | yes | `build.nvidia.com` |
+| `openrouter` | one key, most models | yes | `openrouter.ai/keys` |
+| `openai` | paid only | yes | `platform.openai.com` |
+| `groq` | very fast, text only | no | `console.groq.com` |
+| `ollama` | fully local, free, nothing leaves the machine | no | — |
+| `custom` | any other OpenAI-compatible endpoint | if you say so | your own |
+
+Every score records which backend produced it and how far to trust it —
+`standard`, `third-party`, or `local-estimate` — alongside the subscores and
+adjustments, because a score you cannot audit is the thing this app exists to
+avoid. A backend with no vision model simply skips the visual pass, and that
+shows up in the clip's `signals_missing` rather than silently.
+
+Keys live in `~/.publikclip/secrets.json` (owner-only on macOS and Linux) or in
+`PUBLIKCLIP_<PROVIDER>_API_KEY`. Override any preset's model without touching
+code:
+
+```sh
+PUBLIKCLIP_LLM_MODEL=meta/llama-3.3-70b-instruct publikclip run <url> --llm nvidia
+```
+
+For an endpoint with no preset — a self-hosted vLLM, LM Studio, Together,
+DeepSeek — use `custom`:
+
+```sh
+export PUBLIKCLIP_LLM_BASE_URL=http://localhost:8000/v1
+export PUBLIKCLIP_LLM_MODEL=my-model
+publikclip run <url> --llm custom
+```
+
+`PUBLIKCLIP_LLM_BASE_URL` is deliberately not settable from the app's UI: it
+decides where every transcript is sent, so it stays an env var or a hand-edited
+file.
+
+### A note on free tiers
+
+Some providers use free-tier traffic to train on. Google states that free-tier
+Gemini content is used to improve its products and paid-tier content is not.
+If you process material that is not yours to hand over, check your provider's
+terms, use a paid tier, or run `ollama`.
 
 ## Status
 

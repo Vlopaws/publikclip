@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import type { JobSummary } from '../types'
+import { BRAINS } from '../brains'
 import KeyModal from './KeyModal'
 
 const STAGE_ORDER = [
@@ -35,6 +37,15 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
   const [showKey, setShowKey] = useState(false)
+  // Which brains actually have a key, so the picker can say so up front
+  // instead of letting an hour-long job die on its first scoring call.
+  const [keys, setKeys] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    invoke<{ keys?: Record<string, boolean> }>('get_setup_state')
+      .then((s) => setKeys(s.keys ?? {}))
+      .catch(() => setKeys({}))
+  }, [showKey]) // re-read when the key modal closes
 
   return (
     <div className="studio">
@@ -64,7 +75,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
         </div>
         <footer className="rail-foot">
           <button className="btn-ghost" onClick={() => setShowKey(true)}>
-            ◈ gemini key
+            ◈ api keys
           </button>
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
@@ -96,16 +107,21 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           <div className="run-options">
             <div className="opt-group">
               <span className="opt-label">brain</span>
-              {['gemini', 'ollama'].map((mode) => (
-                <button
-                  key={mode}
-                  className={`opt ${llm === mode ? 'opt-on' : ''}`}
-                  onClick={() => setLlm(mode)}
-                  disabled={running}
-                >
-                  {mode}
-                </button>
-              ))}
+              {BRAINS.map((brain) => {
+                const ready = brain.secret === null || keys[brain.secret]
+                return (
+                  <button
+                    key={brain.mode}
+                    className={`opt ${llm === brain.mode ? 'opt-on' : ''} ${ready ? '' : 'dim'}`}
+                    onClick={() => setLlm(brain.mode)}
+                    disabled={running}
+                    title={ready ? brain.note : `No key saved — add one under THE BRAIN (${brain.signup}).`}
+                  >
+                    {brain.label}
+                    {ready ? '' : ' ·'}
+                  </button>
+                )
+              })}
             </div>
             <div className="opt-group">
               <span className="opt-label">captions</span>

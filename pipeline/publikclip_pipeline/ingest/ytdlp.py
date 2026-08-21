@@ -28,6 +28,7 @@ from typing import Callable
 import httpx
 
 from .. import config
+from ..integrity import IntegrityError, digest_from_manifest, verify
 
 ProgressFn = Callable[[float, str], None]  # (fraction 0..1 or -1, message)
 
@@ -49,14 +50,51 @@ def binary_path() -> Path:
     return config.bin_dir() / _binary_name()
 
 
+_RELEASE_BASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download"
+
+
+def _release_digest(binary: str) -> str:
+    """The digest yt-dlp published for `binary` in the release we are about
+    to pull from.
+
+    Fetched from the same `releases/latest` tag as the binary itself, so the
+    two always describe one release even when a new one lands mid-download.
+    Fail-closed: yt-dlp ships SHA2-256SUMS with every release, so a missing
+    or unparseable manifest means something is wrong with the source, not
+    with our expectations.
+    """
+    try:
+        res = httpx.get(
+            f"{_RELEASE_BASE}/SHA2-256SUMS",
+            follow_redirects=True,
+            timeout=config.HTTP_TIMEOUT,
+        )
+        res.raise_for_status()
+    except httpx.HTTPError as err:
+        raise YtDlpError(f"Could not fetch yt-dlp's checksum manifest: {err}") from err
+    digest = digest_from_manifest(res.text, binary)
+    if not digest:
+        raise YtDlpError(f"yt-dlp's checksum manifest lists no entry for {binary}.")
+    return digest
+
+
 def ensure_ytdlp(progress: ProgressFn) -> Path:
-    """Download the official standalone binary on first use (~30 MB)."""
+    """Download the official standalone binary on first use (~30 MB).
+
+    Verified against the release's own SHA2-256SUMS before it is put in
+    place — this binary is executed on every ingest, so a swapped release
+    asset would be straightforward code execution. Later `-U` self-updates
+    are checked by yt-dlp's own updater, which we deliberately keep enabled
+    (see module docstring).
+    """
     path = binary_path()
     if path.exists():
         return path
     progress(-1, "Downloading yt-dlp (one-time setup)…")
     config.ensure_home()
-    url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{_binary_name()}"
+    binary = _binary_name()
+    expected = _release_digest(binary)
+    url = f"{_RELEASE_BASE}/{binary}"
     tmp = path.with_suffix(".download")
     with httpx.stream("GET", url, follow_redirects=True, timeout=config.HTTP_TIMEOUT) as res:
         if res.status_code != 200:
@@ -71,6 +109,10 @@ def ensure_ytdlp(progress: ProgressFn) -> Path:
                 seen += len(chunk)
                 if total:
                     progress(min(1.0, seen / total) * 0.15, "Downloading yt-dlp (one-time setup)…")
+    try:
+        verify(tmp, expected, "yt-dlp")
+    except IntegrityError as err:
+        raise YtDlpError(str(err)) from err
     tmp.chmod(0o755)
     tmp.replace(path)
     return path
