@@ -15,6 +15,7 @@ what should exist so a stage can decide whether to skip itself on resume.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,54 @@ def models_dir() -> Path:
 
 def db_path() -> Path:
     return home_dir() / "db.sqlite3"
+
+
+def read_text(path: Path) -> str:
+    """Read a text artifact, tolerating files written before UTF-8 was
+    explicit, and repairing them in place.
+
+    Everything the pipeline writes is UTF-8 now, but jobs created by an
+    earlier build carry checkpoints in the Windows locale encoding — reading
+    those strictly turns an upgrade into a crash on somebody\'s half-finished
+    work. Falling back and rewriting means the wrong encoding is fixed the
+    first time the file is touched, rather than forever tolerated.
+    """
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    text = raw.decode("cp1252", errors="replace")
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # read-only artifact: still return what we decoded
+    return text
+
+
+def secrets() -> dict:
+    """Everything in PUBLIKCLIP_HOME/secrets.json, or {} if unreadable."""
+    path = home_dir() / "secrets.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def secret(field: str, env: str) -> str | None:
+    """Env var first, then secrets.json.
+
+    One reader for every credential the pipeline takes. Env wins so a single
+    run can be pointed elsewhere without touching the file the app owns, and
+    a lone implementation means a new secret cannot quietly miss the
+    handling the others get.
+    """
+    value = os.environ.get(env)
+    if not value:
+        value = secrets().get(field)
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def ensure_home() -> Path:
@@ -80,7 +129,11 @@ class Settings:
     camera: CameraSettings = field(default_factory=CameraSettings)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
-    llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
+    # Defaults to the backend that cannot generate a bill. Every hosted
+    # option here is metered, and an unattended run that picks one by
+    # default turns a forgotten cron job into an invoice. Choosing a paid
+    # backend stays an explicit act: --llm, or the picker in the app.
+    llm_mode: str = "ollama"
     caption_preset: str = "classic"
     # jrgillick laughter specialist: 10 ms precision but ~300k CPU forward
     # passes on an hour-plus source. OFF by default — PANNs' AudioSet

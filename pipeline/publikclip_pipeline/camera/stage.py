@@ -46,7 +46,7 @@ class CameraStage(Stage):
         detector = FaceDetector(str(uf))
         model = asd_mod.AsdModel(str(fe), str(be))
 
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
         dynamics = np.asarray(curves["dynamics"], dtype=float)
         grid = float(curves["grid_sec"])
         turns = diarize["turns"]
@@ -77,7 +77,7 @@ class CameraStage(Stage):
                         "meta": traj.meta,
                     }
                 )
-            )
+            , encoding="utf-8")
             trajectories[str(i)] = str(out_path)
             stats.append(
                 {

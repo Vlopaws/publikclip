@@ -283,9 +283,38 @@ DOWNLOAD_FORMAT = (
 _PCT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 
 
+def _ffmpeg_location(progress: ProgressFn) -> str | None:
+    """Where yt-dlp should look for ffmpeg to merge separate A/V streams.
+
+    shutil.which("ffmpeg") alone was not enough, and it failed in the worst
+    way: on a machine with no system ffmpeg it returns None, yt-dlp then
+    fetches video and audio but cannot merge them, and the caller reports
+    "no output file was produced" with no hint as to why.
+
+    This project already manages a static ffmpeg for exactly this case (the
+    render stage needs one built with libass), so ask that resolver first
+    and fetch the managed build if nothing is available yet. None is still a
+    valid answer — a progressive-format download needs no merge at all.
+    """
+    from ..render import ffmpeg_bin
+
+    path = ffmpeg_bin.ffmpeg()
+    if os.path.exists(path):
+        return path
+    found = shutil.which(path)
+    if found:
+        return found
+    progress(-1, "Fetching ffmpeg (needed to merge video and audio)...")
+    if ffmpeg_bin.ensure_capable(progress):
+        path = ffmpeg_bin.ffmpeg()
+        if os.path.exists(path):
+            return path
+    return shutil.which("ffmpeg")
+
+
 def download(url: str, out_path: Path, progress: ProgressFn) -> None:
     bin_path = ensure_ytdlp(progress)
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_location(progress)
     args = [
         "-f", DOWNLOAD_FORMAT,
         "--merge-output-format", "mp4",

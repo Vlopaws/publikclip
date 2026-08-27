@@ -34,7 +34,7 @@ interface Props {
 
 export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
-  const [llm, setLlm] = useState('gemini')
+  const [llm, setLlm] = useState('ollama')
   const [captions, setCaptions] = useState('classic')
   const [showKey, setShowKey] = useState(false)
   // Which brains actually have a key, so the picker can say so up front

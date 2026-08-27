@@ -155,8 +155,8 @@ def rendered_clips() -> list[dict]:
         if not render_path.exists() or not score_path.exists():
             continue
         try:
-            render = json.loads(render_path.read_text())["data"]
-            score = json.loads(score_path.read_text())["data"]
+            render = json.loads(render_path.read_text(encoding="utf-8"))["data"]
+            score = json.loads(score_path.read_text(encoding="utf-8"))["data"]
         except (json.JSONDecodeError, KeyError, OSError):
             continue
         clips = score.get("clips", [])

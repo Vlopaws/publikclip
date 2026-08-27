@@ -136,3 +136,57 @@ def test_failure_then_resume_skips_completed_stages():
     assert counting.runs == 1  # not re-run
     assert results["failing"] == {"ok": True}
     assert queue.get_job(job.id).status == "done"
+
+
+# --- legacy encodings ------------------------------------------------------
+
+
+def test_a_checkpoint_written_before_utf8_was_explicit_still_loads(tmp_path, monkeypatch):
+    """Jobs created by an earlier build carry checkpoints in the Windows
+    locale encoding. Reading those strictly turned an upgrade into a crash on
+    somebody's half-finished work."""
+    from publikclip_pipeline import config
+
+    monkeypatch.setenv("PUBLIKCLIP_HOME", str(tmp_path))
+    config.ensure_home()
+    job = queue.create_job("url", "https://x.invalid/a", "{}")
+    path = queue.checkpoint_path(job, "asr")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = '{"schema_version": 1, "data": {"title": "écoles françaises — 90 %"}}'
+    path.write_bytes(payload.encode("cp1252"))
+
+    data = queue.read_checkpoint(job, "asr", 1)
+    assert data is not None, "a legacy checkpoint was rejected"
+    assert data["title"] == "écoles françaises — 90 %", "accents were mangled"
+
+
+def test_reading_a_legacy_checkpoint_repairs_it(tmp_path, monkeypatch):
+    """Self-healing rather than tolerated forever: after one read the file is
+    valid UTF-8 for every other reader in the pipeline."""
+    from publikclip_pipeline import config
+
+    monkeypatch.setenv("PUBLIKCLIP_HOME", str(tmp_path))
+    config.ensure_home()
+    job = queue.create_job("url", "https://x.invalid/b", "{}")
+    path = queue.checkpoint_path(job, "asr")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes('{"schema_version": 1, "data": {"t": "café"}}'.encode("cp1252"))
+
+    queue.read_checkpoint(job, "asr", 1)
+    assert json.loads(path.read_text(encoding="utf-8"))["data"]["t"] == "café"
+
+
+def test_utf8_checkpoints_are_untouched(tmp_path, monkeypatch):
+    from publikclip_pipeline import config
+
+    monkeypatch.setenv("PUBLIKCLIP_HOME", str(tmp_path))
+    config.ensure_home()
+    job = queue.create_job("url", "https://x.invalid/c", "{}")
+    path = queue.checkpoint_path(job, "asr")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = '{"schema_version": 1, "data": {"t": "déjà en utf-8"}}'
+    path.write_text(payload, encoding="utf-8")
+    before = path.read_bytes()
+
+    assert queue.read_checkpoint(job, "asr", 1)["t"] == "déjà en utf-8"
+    assert path.read_bytes() == before, "a valid file was rewritten for nothing"

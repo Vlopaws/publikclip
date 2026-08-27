@@ -49,14 +49,14 @@ class CandidatesStage(Stage):
         curves_path = Path(events["curves_path"])
         if not curves_path.exists():
             raise StageError("curves.json missing — re-run events.")
-        curves = json.loads(curves_path.read_text())
+        curves = json.loads(curves_path.read_text(encoding="utf-8"))
 
         ctx.emit(-1, "Detecting scene changes…")
         try:
             scene_times = detect_scenes(ingest["media_path"])
         except Exception:  # noqa: BLE001 — scenes are a minor channel; degrade
             scene_times = []
-        (ctx.job_dir / "scenes.json").write_text(json.dumps(scene_times))
+        (ctx.job_dir / "scenes.json").write_text(json.dumps(scene_times), encoding="utf-8")
 
         ctx.emit(0.6, "Building interest curve…")
         channels = {
@@ -82,7 +82,7 @@ class CandidatesStage(Stage):
         # Persist the curve for the review UI's timeline visualization.
         (ctx.job_dir / "interest_curve.json").write_text(
             json.dumps({"per_sec": np.round(curve, 4).tolist()})
-        )
+        , encoding="utf-8")
 
         return {
             "candidates": [c.to_json() for c in candidates],

@@ -36,6 +36,51 @@ def _point_caches_at_home() -> None:
     os.environ.setdefault("HF_HOME", str(hf_home))
     os.environ.setdefault("TORCH_HOME", str(config.models_dir() / "torch"))
 
+    # whisperx decodes audio by shelling out to a bare `ffmpeg`, so the
+    # managed one has to be findable on PATH and not just through our own
+    # resolver — otherwise transcription dies on WinError 2 with no clue why.
+    from ..render import ffmpeg_bin
+
+    ffmpeg_bin.ensure_on_path()
+
+
+def _settle_librosa_before_speechbrain() -> None:
+    """Import librosa's audio module before anything pulls in speechbrain.
+
+    These two lazy-loading libraries are mutually hostile. Importing
+    `librosa.core.audio` runs `lazy.load("samplerate")`, which calls
+    `inspect.stack()`; `inspect` then walks every entry in `sys.modules` and
+    reads `__file__` off each one. Once speechbrain is loaded, some of those
+    entries are its own lazy placeholders for optional integrations, and
+    touching the k2 one raises ImportError because `k2` is not installed
+    (and is not installable on Windows).
+
+    The whole collision hangs on that single `inspect.stack()`, which runs
+    exactly once, at import. Doing it here — before the ASR stage loads
+    whisperx, and therefore before speechbrain exists — means the walk finds
+    nothing dangerous. Cheaper and less invasive than patching either
+    library, and this stage already pays for heavy imports.
+    """
+    import librosa.core.audio  # noqa: F401
+
+
+def _choose_backend() -> str:
+    """Hosted or local transcription.
+
+    Defaults to hosted when a Groq key exists, because the local path is the
+    single most expensive stage in the pipeline — measured here at 63 minutes
+    for 20 minutes of audio on an eight-core laptop, against seconds hosted.
+    Set PUBLIKCLIP_ASR_BACKEND=local to keep everything on the machine.
+    """
+    from . import hosted
+
+    choice = (config.secret("asr_backend", "PUBLIKCLIP_ASR_BACKEND") or "auto").lower()
+    if choice in ("local", "whisperx"):
+        return "local"
+    if choice == "groq":
+        return "groq"
+    return "groq" if hosted.available() else "local"
+
 
 class AsrStage(Stage):
     name = "asr"
@@ -49,7 +94,19 @@ class AsrStage(Stage):
         if not audio_path.exists():
             raise StageError("Analysis audio missing — re-run ingest.")
 
+        backend = _choose_backend()
+        if backend == "groq":
+            from . import hosted
+
+            try:
+                return hosted.transcribe(audio_path, progress=ctx.emit)
+            except hosted.HostedAsrError as err:
+                # Falling back silently would hide a paid path that stopped
+                # working and quietly cost an hour instead of a minute.
+                raise StageError(str(err)) from err
+
         _point_caches_at_home()
+        _settle_librosa_before_speechbrain()
         ctx.emit(-1, "Loading speech model (downloads ~1.6 GB on first run)…")
         import torch  # deferred: heavy import
         import whisperx

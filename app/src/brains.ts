@@ -50,7 +50,7 @@ export const BRAINS: Brain[] = [
     secret: 'openrouter_api_key',
     placeholder: 'sk-or-…',
     signup: 'openrouter.ai/keys',
-    note: 'One key, most models. Pay per token at each model’s own rate.',
+    note: 'Runs stealth/ox-alpha (reasoning) for judgment, with a multimodal model for the frame pass. One key, most models.',
     vision: true
   },
   {

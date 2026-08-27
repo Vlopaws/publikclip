@@ -116,8 +116,23 @@ def _client(monkeypatch, mode):
     return llm.make_client(mode)
 
 
-def test_nvext_sends_guided_json_and_leaves_the_prompt_alone(monkeypatch):
+def test_nvidia_uses_the_standard_response_format(monkeypatch):
+    """Verified against the live API: the hosted catalogue rejects nvext
+    outright (400, 'unknown field guided_json') — that extension belongs to
+    self-hosted NIM containers. Regressing this silently returns prose."""
     prompt, extra = _client(monkeypatch, "nvidia")._structured("Rate this.", SCHEMA)
+    assert extra["response_format"]["type"] == "json_schema"
+    assert "nvext" not in extra
+    assert prompt == "Rate this."
+
+
+def test_nvext_remains_available_for_self_hosted_nim(monkeypatch, tmp_path):
+    """Still the right dialect for a NIM container someone runs themselves,
+    reachable through the custom provider."""
+    monkeypatch.setenv("PUBLIKCLIP_LLM_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("PUBLIKCLIP_LLM_MODEL", "local-nim")
+    monkeypatch.setenv("PUBLIKCLIP_LLM_STRUCTURED", "nvext")
+    prompt, extra = llm.make_client("custom")._structured("Rate this.", SCHEMA)
     assert extra == {"nvext": {"guided_json": SCHEMA}}
     assert prompt == "Rate this."
 
@@ -265,3 +280,53 @@ def test_rate_limit_surfaces_the_servers_own_words(monkeypatch):
     with pytest.raises(llm.LlmError) as err:
         client.generate_json("hi", SCHEMA)
     assert "credits exhausted" in str(err.value)
+
+
+# --- reasoning models ------------------------------------------------------
+
+
+def test_openrouter_defaults_to_ox_alpha_with_a_seeing_companion(monkeypatch):
+    """The text judge and the frame reader are different models on purpose."""
+    client = _client(monkeypatch, "openrouter")
+    assert client.model == "stealth/ox-alpha"
+    assert client.vision_model and client.vision_model != client.model
+
+
+def test_reasoning_effort_is_sent_when_the_provider_declares_it(monkeypatch):
+    client = _client(monkeypatch, "openrouter")
+    post = _Recorder({"hook": 7})
+    monkeypatch.setattr(llm.httpx, "post", post)
+    client.generate_json("rate this", SCHEMA)
+    assert post.bodies[0]["reasoning"] == {"effort": "low"}
+
+
+def test_a_provider_without_reasoning_sends_none(monkeypatch):
+    """Sending the parameter to a server that does not know it is noise."""
+    client = _client(monkeypatch, "nvidia")
+    post = _Recorder({"hook": 7})
+    monkeypatch.setattr(llm.httpx, "post", post)
+    client.generate_json("rate this", SCHEMA)
+    assert "reasoning" not in post.bodies[0]
+
+
+def test_reasoning_effort_is_overridable(monkeypatch):
+    monkeypatch.setenv("PUBLIKCLIP_LLM_REASONING", "high")
+    client = _client(monkeypatch, "openrouter")
+    assert client.reasoning == "high"
+
+
+def test_reasoning_can_be_turned_off(monkeypatch):
+    """Thinking costs tokens on every one of ~60 calls per source."""
+    monkeypatch.setenv("PUBLIKCLIP_LLM_REASONING", "off")
+    client = _client(monkeypatch, "openrouter")
+    assert client.reasoning is None
+    post = _Recorder({"hook": 7})
+    monkeypatch.setattr(llm.httpx, "post", post)
+    client.generate_json("rate this", SCHEMA)
+    assert "reasoning" not in post.bodies[0]
+
+
+def test_reasoning_can_be_enabled_on_a_provider_that_has_none(monkeypatch):
+    monkeypatch.setenv("PUBLIKCLIP_LLM_REASONING", "medium")
+    client = _client(monkeypatch, "nvidia")
+    assert client.reasoning == "medium"

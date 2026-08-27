@@ -202,6 +202,21 @@ def switch_cut_frames(targets: list, threshold: float = 0.12) -> list[int]:
     return cuts
 
 
+# A punch has to sit on a real peak, not anywhere in a loud stretch.
+# Half-width of the neighbourhood a candidate must be the maximum of.
+PEAK_RADIUS_SEC = 1.5
+
+# ...and it must stand clear of that neighbourhood's baseline. Tuned to let
+# a genuine burst through while rejecting the plateau of an animated but
+# steady delivery.
+PEAK_PROMINENCE = 1.25
+
+# One energy punch per this many seconds of clip, against one per eight for
+# event-driven ones. Vocal emphasis is a weaker signal than a laugh and
+# deserves a smaller budget.
+ENERGY_PUNCH_INTERVAL_SEC = 20.0
+
+
 def punch_schedule(
     timeline: list[dict],
     energy_dynamics: np.ndarray,
@@ -220,16 +235,39 @@ def punch_schedule(
         if clip_start + 1.0 <= onset <= clip_end - 2.0 and event.get("confidence", 0) >= 0.5 / sensitivity:
             punches.append(Punch(start=onset - clip_start, trigger=event["type"]))
 
+    energy_punches: list[Punch] = []
     if len(energy_dynamics):
         a = int(clip_start / dynamics_grid)
         b = min(len(energy_dynamics), int(clip_end / dynamics_grid))
         window = energy_dynamics[a:b]
         if len(window):
             thresh = np.percentile(energy_dynamics, 100 - 4 * sensitivity)
+            radius = max(1, int(PEAK_RADIUS_SEC / dynamics_grid))
             for i in np.where(window >= thresh)[0]:
                 t = i * dynamics_grid
-                if 1.0 <= t <= (clip_end - clip_start) - 2.0:
-                    punches.append(Punch(start=float(t), trigger="energy"))
+                if not (1.0 <= t <= (clip_end - clip_start) - 2.0):
+                    continue
+                lo, hi = max(0, i - radius), min(len(window), i + radius + 1)
+                neighbourhood = window[lo:hi]
+                # A frame merely being loud is not an event: in a sustained
+                # passage every frame clears the threshold, and the punch then
+                # lands on whichever one survives the spacing filter — an
+                # arbitrary moment that reads on screen as a zoom for no
+                # reason. Require an actual local peak that stands out from
+                # what surrounds it.
+                if window[i] < neighbourhood.max():
+                    continue
+                baseline = float(np.median(neighbourhood))
+                if baseline > 0 and window[i] < baseline * PEAK_PROMINENCE:
+                    continue
+                energy_punches.append(Punch(start=float(t), trigger="energy"))
+
+    # Events earn their punch — a laugh or a gasp is a moment. Loudness only
+    # correlates with one, so it gets a much tighter budget: material without
+    # laughter (an interview, a tech explainer) would otherwise be zoomed
+    # every eight seconds on vocal emphasis alone.
+    energy_cap = max(0, int((clip_end - clip_start) / ENERGY_PUNCH_INTERVAL_SEC))
+    punches.extend(energy_punches[:energy_cap] if energy_cap else [])
 
     punches.sort(key=lambda p: p.start)
     spaced: list[Punch] = []

@@ -21,7 +21,7 @@ from .timeline import ClipEdit, TimeRemap, detect_dead_space, keep_ranges
 
 
 def _load_stage(job_dir: Path, stage: str) -> dict:
-    return json.loads((job_dir / f"{stage}.json").read_text())["data"]
+    return json.loads((job_dir / f"{stage}.json").read_text(encoding="utf-8"))["data"]
 
 
 def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
@@ -43,7 +43,7 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
         for w in seg.get("words", [])
         if win_a <= w["start"] <= win_b
     ]
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
     grid = float(curves["grid_sec"])
     rms = curves["rms"][int(win_a / grid) : int(win_b / grid)]
     clip_events = [
@@ -58,10 +58,10 @@ def context_for_clip(job_dir: Path, clip_idx: int, pad: float = 45.0) -> dict:
     trajectory = None
     camera_path = job_dir / "camera.json"
     if camera_path.exists():
-        cam = json.loads(camera_path.read_text())["data"]
+        cam = json.loads(camera_path.read_text(encoding="utf-8"))["data"]
         traj_file = cam.get("trajectories", {}).get(str(clip_idx))
         if traj_file and Path(traj_file).exists():
-            t = json.loads(Path(traj_file).read_text())
+            t = json.loads(Path(traj_file).read_text(encoding="utf-8"))
             trajectory = {"fps": t.get("fps", 25), "frames": t.get("frames", [])}
 
     return {
@@ -96,7 +96,7 @@ def _camera_needs_redirect(job_dir: Path, clip_idx: int, edit: ClipEdit, score_c
 def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: dict, settings: config.Settings, emit) -> dict:
     if not _camera_needs_redirect(job_dir, clip_idx, edit, score_clip):
         traj_path = _load_stage(job_dir, "camera")["trajectories"][str(clip_idx)]
-        return json.loads(Path(traj_path).read_text())
+        return json.loads(Path(traj_path).read_text(encoding="utf-8"))
 
     emit(-1, "Re-directing camera for new bounds…")
     import numpy as np
@@ -109,7 +109,7 @@ def _trajectory_for(job_dir: Path, clip_idx: int, edit: ClipEdit, score_clip: di
     ingest = _load_stage(job_dir, "ingest")
     diarize = _load_stage(job_dir, "diarize")
     events = _load_stage(job_dir, "events")
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
 
     detector = FaceDetector(str(registry.ensure(specs.ULTRAFACE, lambda f, m: None)))
     model = asd_mod.AsdModel(
@@ -174,7 +174,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     diarize = _load_stage(job_dir, "diarize")
     events = _load_stage(job_dir, "events")
     score = _load_stage(job_dir, "score")
-    settings = config.Settings.from_json(json.loads((job_dir / "settings.json").read_text()))
+    settings = config.Settings.from_json(json.loads((job_dir / "settings.json").read_text(encoding="utf-8")))
     clip = score["clips"][clip_idx]
     edit = store.edit_for_clip(job_dir, clip_idx, clip)
 
@@ -207,7 +207,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         if edit.start <= w["start"] < edit.end
     ]
     words_out = remap.remap_words(words_src)
-    curves = json.loads(Path(events["curves_path"]).read_text())
+    curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
     cap_words = [ass_mod.Word(text=w["word"], start=w["start"], end=w["end"]) for w in words_out]
     # Emphasis is a SOURCE-time property (per-word RMS in the original
     # audio): mark it on source-timed copies, then carry each surviving
@@ -245,7 +245,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     out_dir = job_dir / "clips"
     out_dir.mkdir(exist_ok=True)
     ass_path = out_dir / f"clip_{clip_idx:02d}.ass"
-    ass_path.write_text(ass_mod.build_ass(cap_words, clip_events_out, preset_name=preset, emoji_ok=emoji_ok))
+    ass_path.write_text(ass_mod.build_ass(cap_words, clip_events_out, preset_name=preset, emoji_ok=emoji_ok), encoding="utf-8")
 
     # --- build the graph ----------------------------------------------------
     emit(-1, "Rendering clip…")
@@ -261,7 +261,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     graph = trims + [f"{concat_in}concat=n={n}:v=1:a=1[vc][ac]"]
 
     cmd_path = out_dir / f"clip_{clip_idx:02d}.cmd"
-    cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n")
+    cmd_path.write_text("\n".join(renderer.sendcmd_lines(boxes, fps)) + "\n", encoding="utf-8")
     vchain = (
         f"[vc]sendcmd=f={renderer._q(cmd_path)},"  # noqa: SLF001
         f"crop@c=w={boxes[0][0]}:h={boxes[0][1]}:x={boxes[0][2]}:y={boxes[0][3]},"
@@ -317,7 +317,7 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
     # keep render.json in sync so the review UI reflects the new file
     render_ckpt_path = job_dir / "render.json"
     if render_ckpt_path.exists():
-        ckpt = json.loads(render_ckpt_path.read_text())
+        ckpt = json.loads(render_ckpt_path.read_text(encoding="utf-8"))
         outputs = ckpt["data"].get("outputs", [])
         for i, o in enumerate(outputs):
             if o["clip"] == clip_idx:
@@ -326,6 +326,6 @@ def render_clip_edit(job_dir: Path, clip_idx: int, emit) -> dict:
         else:
             outputs.append(entry)
         tmp = render_ckpt_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(ckpt))
+        tmp.write_text(json.dumps(ckpt), encoding="utf-8")
         tmp.replace(render_ckpt_path)
     return entry

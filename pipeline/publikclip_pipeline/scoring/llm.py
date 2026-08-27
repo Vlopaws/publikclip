@@ -67,23 +67,9 @@ class LlmError(Exception):
     """User-actionable LLM failure (bad key, daemon down, model missing)."""
 
 
-def _secrets() -> dict:
-    path = config.home_dir() / "secrets.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _secret(field: str, env: str) -> str | None:
-    """Env var first, then secrets.json. Env wins so a single run can be
-    pointed at another endpoint without touching the file the app owns."""
-    value = os.environ.get(env)
-    if not value:
-        value = _secrets().get(field)
-    return value.strip() if isinstance(value, str) and value.strip() else None
+# Every credential in the pipeline reads through the same helper; see
+# config.secret for why that is a single implementation.
+_secret = config.secret
 
 
 def gemini_api_key() -> str | None:
@@ -149,6 +135,10 @@ class Provider:
     # Recorded in every clip's provenance. Gemini is the backend the rubric
     # was tuned against; anything else should be honest about not being that.
     confidence: str = "third-party"
+    # Effort to request from a reasoning model ("low" | "medium" | "high"),
+    # or None to send nothing. Sent as OpenRouter's `reasoning` parameter;
+    # servers that do not know it ignore it.
+    reasoning: str | None = None
 
 
 # Defaults, not verdicts — override any of them with PUBLIKCLIP_LLM_MODEL /
@@ -160,12 +150,13 @@ PROVIDERS: dict[str, Provider] = {
         name="nvidia",
         label="NVIDIA Build",
         base_url="https://integrate.api.nvidia.com/v1",
-        # Nemotron 3 Super is a ~120B mixture-of-experts with ~12B active, so
-        # it answers at small-model latency — which is what matters when one
-        # hour-long source spends ~35 scoring calls — and NVIDIA tunes the
-        # Nemotron line specifically for instruction following and structured
-        # output.
-        model="nvidia/nemotron-3-super-120b-a12b",
+        # Chosen by measurement against the real T1 prompt, not by benchmark
+        # rank. All three candidates returned a schema-conformant object;
+        # what separated them was that llama-3.3-70b left `summary` empty
+        # (it becomes the clip caption, so that is disqualifying) and Kimi K3
+        # took 26 s to Nemotron's 12 s — at ~60 calls per source that is a
+        # quarter-hour per video.
+        model="nvidia/llama-3.3-nemotron-super-49b-v1.5",
         # The strong text models here are not multimodal, so the T2 frame
         # pass gets its own VLM. NVIDIA's structured-generation docs use the
         # Nemotron VL line as their worked example, so guided_json is known
@@ -174,17 +165,30 @@ PROVIDERS: dict[str, Provider] = {
         key_secret="nvidia_api_key",
         key_env="PUBLIKCLIP_NVIDIA_API_KEY",
         signup="build.nvidia.com — free, no card",
-        structured="nvext",
+        # NOT nvext: `guided_json` belongs to self-hosted NIM containers, and
+        # the hosted catalogue rejects it outright (HTTP 400, "unknown field
+        # guided_json"). The standard OpenAI response_format is what this
+        # endpoint honours, verified against the live API.
+        structured="json_schema",
     ),
     "openrouter": Provider(
         name="openrouter",
         label="OpenRouter",
         base_url="https://openrouter.ai/api/v1",
-        model="google/gemini-2.5-flash",
+        # ox-alpha is a reasoning model, which suits a judgment task: rating
+        # whether something is funny is closer to deliberation than recall.
+        # Unlike NVIDIA's guided_json, OpenRouter keeps reasoning tokens in a
+        # separate channel and applies response_format to the final answer,
+        # so the two do not fight each other here.
+        model="stealth/ox-alpha",
+        # Kept on a model known to take images: the T2 frame pass is the only
+        # multimodal call, and the per-call model switch exists precisely so
+        # the text judge does not have to be the one that can see.
         vision_model="google/gemini-2.5-flash",
         key_secret="openrouter_api_key",
         key_env="PUBLIKCLIP_OPENROUTER_API_KEY",
         signup="openrouter.ai/keys",
+        reasoning="low",
     ),
     "openai": Provider(
         name="openai",
@@ -270,6 +274,10 @@ class OpenAICompatClient:
             _secret("llm_vision_model", "PUBLIKCLIP_LLM_VISION_MODEL") or provider.vision_model
         )
         self.confidence = provider.confidence
+        # "off" disables it explicitly; anything else overrides the effort.
+        self.reasoning = _secret("llm_reasoning", "PUBLIKCLIP_LLM_REASONING") or provider.reasoning
+        if self.reasoning == "off":
+            self.reasoning = None
         key = _secret(provider.key_secret, provider.key_env)
         if not key and provider.name != "custom":
             raise LlmError(
@@ -284,8 +292,13 @@ class OpenAICompatClient:
 
     def _structured(self, prompt: str, schema: dict) -> tuple[str, dict]:
         """(prompt, extra body fields) for this server's flavour of
-        structured output."""
-        mode = self.provider.structured
+        structured output.
+
+        Overridable per run: grammar-constrained decoding and a reasoning
+        model fight each other, and which one wins is a property of the
+        model, not of the endpoint the preset describes.
+        """
+        mode = _secret("llm_structured", "PUBLIKCLIP_LLM_STRUCTURED") or self.provider.structured
         if mode == "nvext":
             # Grammar-constrained decoding: the server cannot emit anything
             # off-schema, so the prompt stays clean.
@@ -335,7 +348,7 @@ class OpenAICompatClient:
             _cache_dir() / f"{_cache_key(self.backend, model, prompt, schema, images)}.json"
         )
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            return json.loads(cache_file.read_text(encoding="utf-8"))
 
         body_prompt, extra = self._structured(prompt, schema)
         body: dict[str, Any] = {
@@ -345,6 +358,10 @@ class OpenAICompatClient:
             "stream": False,
             **extra,
         }
+        if self.reasoning:
+            # Thinking costs tokens on every one of the ~60 calls a source
+            # spends, so the effort is a knob rather than a constant.
+            body["reasoning"] = {"effort": self.reasoning}
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
 
         last_err: Exception | None = None
@@ -377,7 +394,21 @@ class OpenAICompatClient:
                     time.sleep(2**attempt)
                     continue
                 res.raise_for_status()
-                data = json.loads(_strip_fences(res.json()["choices"][0]["message"]["content"]))
+                text = res.json()["choices"][0]["message"]["content"] or ""
+                try:
+                    data = json.loads(_strip_fences(text))
+                except json.JSONDecodeError as err:
+                    # A bare "Expecting value: line 1 column 1" hides the only
+                    # useful fact: what the model actually said. Models that
+                    # ignore response_format answer in prose, and that is a
+                    # property of the model, not a transient failure.
+                    preview = text.strip()[:200] or "(empty response)"
+                    raise LlmError(
+                        f"{self.provider.label} returned no usable JSON for "
+                        f"{model}. It answered: {preview!r}. That model may not "
+                        "support enforced structured output — try another, or "
+                        "PUBLIKCLIP_LLM_STRUCTURED=json_object."
+                    ) from err
             except LlmError:
                 raise
             except (httpx.HTTPError, KeyError, json.JSONDecodeError, IndexError) as err:
@@ -387,7 +418,7 @@ class OpenAICompatClient:
                         f"{self.provider.label} call failed after 3 attempts: {err}"
                     ) from err
                 continue
-            cache_file.write_text(json.dumps(data))
+            cache_file.write_text(json.dumps(data), encoding="utf-8")
             return data
         raise LlmError(f"{self.provider.label} call failed: {last_err}")
 
@@ -413,7 +444,7 @@ class GeminiClient:
         images = images or []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, images)}.json"
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            return json.loads(cache_file.read_text(encoding="utf-8"))
 
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for img in images:
@@ -460,7 +491,7 @@ class GeminiClient:
                 payload = res.json()
                 text = payload["candidates"][0]["content"]["parts"][0]["text"]
                 data = json.loads(_strip_fences(text))
-                cache_file.write_text(json.dumps(data))
+                cache_file.write_text(json.dumps(data), encoding="utf-8")
                 return data
             except LlmError:
                 raise
@@ -480,7 +511,8 @@ class OllamaClient:
             res.raise_for_status()
         except httpx.HTTPError as err:
             raise LlmError(
-                "Ollama isn't running. Start it (`ollama serve`) or switch to Gemini mode."
+                "Ollama isn't running. Start it (`ollama serve`), or pick a "
+                "hosted backend with --llm (those are metered)."
             ) from err
         models = [m["name"] for m in res.json().get("models", [])]
         if not models:
@@ -495,7 +527,7 @@ class OllamaClient:
             images = []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, [])}.json"
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            return json.loads(cache_file.read_text(encoding="utf-8"))
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -509,7 +541,7 @@ class OllamaClient:
             data = json.loads(_strip_fences(res.json()["message"]["content"]))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as err:
             raise LlmError(f"Ollama call failed: {err}") from err
-        cache_file.write_text(json.dumps(data))
+        cache_file.write_text(json.dumps(data), encoding="utf-8")
         return data
 
 

@@ -83,12 +83,12 @@ class ScoreStage(Stage):
 
         segments = diarize["segments"]
         timeline = events["timeline"]
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
         arousal = np.asarray(curves.get("arousal", []), dtype=float)
         arousal_grid = float(curves.get("arousal_grid_sec", 0.5))
         arousal_source = curves.get("arousal_source", "dsp-proxy")
         heatmap = ingest.get("heatmap")
-        scene_times = json.loads((ctx.job_dir / "scenes.json").read_text()) if (ctx.job_dir / "scenes.json").exists() else []
+        scene_times = json.loads((ctx.job_dir / "scenes.json").read_text(encoding="utf-8")) if (ctx.job_dir / "scenes.json").exists() else []
 
         heat_values = None
         if heatmap:

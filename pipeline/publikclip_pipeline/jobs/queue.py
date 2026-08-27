@@ -137,7 +137,7 @@ def set_job_status(job_id: str, status: str, error: str | None = None, title: st
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(path)
 
 
@@ -171,8 +171,8 @@ def read_checkpoint(job: Job, stage: str, schema_version: int) -> dict | None:
     if not path.exists():
         return None
     try:
-        envelope = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        envelope = json.loads(config.read_text(path))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if envelope.get("schema_version") != schema_version:
         return None

@@ -21,7 +21,7 @@ def load(job_dir: Path) -> dict[str, ClipEdit]:
     if not p.exists():
         return {}
     try:
-        raw = json.loads(p.read_text())
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
     return {k: ClipEdit.from_json(v) for k, v in raw.items()}
@@ -29,7 +29,7 @@ def load(job_dir: Path) -> dict[str, ClipEdit]:
 
 def save(job_dir: Path, edits: dict[str, ClipEdit]) -> None:
     tmp = path_for(job_dir).with_suffix(".tmp")
-    tmp.write_text(json.dumps({k: e.to_json() for k, e in edits.items()}, indent=1))
+    tmp.write_text(json.dumps({k: e.to_json() for k, e in edits.items()}, indent=1), encoding="utf-8")
     tmp.replace(path_for(job_dir))
 
 

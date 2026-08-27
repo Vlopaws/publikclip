@@ -119,7 +119,7 @@ def render_clip(
     fps = float(trajectory.get("fps", 25))
 
     cmd_path = out_path.with_suffix(".cmd")
-    cmd_path.write_text("\n".join(sendcmd_lines(boxes, fps)) + "\n")
+    cmd_path.write_text("\n".join(sendcmd_lines(boxes, fps)) + "\n", encoding="utf-8")
 
     w0, h0, x0, y0 = boxes[0]
     vf_parts = [

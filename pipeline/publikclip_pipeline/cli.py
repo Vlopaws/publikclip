@@ -20,28 +20,11 @@ from .scoring import llm as llm_mod
 
 
 def _stages() -> list[queue.Stage]:
-    # Grows per milestone: ingest → asr → diarize → events → candidates →
-    # score → camera → render. Stage imports are deferred so `publikclip
-    # jobs` doesn't pay the torch import tax.
-    from .asr.stage import AsrStage
-    from .camera.stage import CameraStage
-    from .candidates.stage import CandidatesStage
-    from .diarize.stage import DiarizeStage
-    from .events.stage import EventsStage
-    from .ingest.stage import IngestStage
-    from .render.stage import RenderStage
-    from .scoring.stage import ScoreStage
+    # The autopilot runs the same list; it lives in one place so a new stage
+    # cannot be added to the CLI and forgotten for unattended runs.
+    from .stages import default_stages
 
-    return [
-        IngestStage(),
-        AsrStage(),
-        DiarizeStage(),
-        EventsStage(),
-        CandidatesStage(),
-        ScoreStage(),
-        CameraStage(),
-        RenderStage(),
-    ]
+    return default_stages()
 
 
 def _progress_printer(jsonl: bool):
@@ -131,6 +114,159 @@ def cmd_jobs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_auto(args: argparse.Namespace) -> int:
+    """Discover, clip and (optionally) publish, without a person in the loop."""
+    from . import autopilot
+    from .sources import twitch, youtube
+
+    if args.youtube:
+        candidates = youtube.recent_uploads(
+            args.youtube, limit=args.limit, progress=_stderr_progress
+        )
+    else:
+        candidates = twitch.channel_clips(
+            args.twitch, limit=args.limit, progress=_stderr_progress
+        )
+
+    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    try:
+        publisher = autopilot.make_publisher(args.publish, visibility=args.visibility)
+    except autopilot.PublishError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
+    def note(kind: str, message: str) -> None:
+        if args.jsonl:
+            print(json.dumps({"event": "auto", "kind": kind, "message": message}), flush=True)
+        else:
+            print(message, file=sys.stderr, flush=True)
+
+    try:
+        report = autopilot.run(
+            candidates,
+            publisher=publisher,
+            platforms=platforms,
+            clips_per_video=args.clips,
+            min_score=args.min_score,
+            llm_mode=args.llm or "ollama",
+            captions=args.captions,
+            skip_seen=not args.include_seen,
+            on_event=note,
+        )
+    except autopilot.PublishError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
+    if args.jsonl:
+        print(json.dumps({"event": "result", **report.to_json()}), flush=True)
+    else:
+        print(json.dumps(report.to_json(), indent=2))
+    return 0 if report.failures == 0 else 1
+
+
+def cmd_sources(args: argparse.Namespace) -> int:
+    """Discovery only — list what could be clipped, download nothing.
+
+    Kept separate from `run` on purpose: deciding what is worth an hour of
+    compute is a different question from doing the hour of compute, and
+    seeing the list first is what makes automation reviewable.
+    """
+    from .sources import twitch, youtube
+    from .sources import common as sources_common
+
+    # The help promises "0 disables"; without this it silently means "reject
+    # everything longer than zero seconds", which filters out every result.
+    def _bound(value):
+        return None if not value else value
+
+    args.min_duration = _bound(args.min_duration)
+    args.max_duration = _bound(args.max_duration)
+
+    if args.source_cmd == "scan":
+        from .sources import opportunity
+
+        emit = None if args.json else _stderr_progress
+        if args.no_audience:
+            report = opportunity.clip_saturation(
+                args.creator, per_query=args.per_query, progress=emit
+            )
+            payload, headline = report.to_json(), report.verdict
+            saturation = report
+            demand = None
+        else:
+            assessment = opportunity.assess(
+                args.creator, channel=args.channel, per_query=args.per_query, progress=emit
+            )
+            payload, headline = assessment.to_json(), assessment.verdict
+            saturation = assessment.saturation
+            demand = assessment
+
+        if args.json:
+            print(json.dumps(payload))
+            return 0
+
+        print(f"{args.creator}: {headline.upper()}")
+        if demand is not None:
+            views = f"{demand.median_views:,}".replace(",", " ") if demand.median_views else "?"
+            print(f"  demand   median {views} views over {demand.uploads_seen} recent uploads"
+                  f"  (measured on: {demand.measured_channel or 'unresolved'})")
+        print(f"  supply   {saturation.dedicated_channels} dedicated clip channel(s), "
+              f"best clip {saturation.top_clip_views:,} views".replace(",", " "))
+        for channel in saturation.clip_channels:
+            print(f"    {channel.name[:32]:32s} {channel.videos_found:>2} found  "
+                  f"{channel.top_views:>9,} top".replace(",", " ") + f"  {channel.top_title[:36]}")
+        if not saturation.clip_channels:
+            print("    none surfaced — heuristic over search results, not a census")
+        return 0
+
+    if args.source_cmd == "youtube":
+        items = youtube.recent_uploads(
+            args.channel,
+            limit=args.limit,
+            min_duration_sec=args.min_duration,
+            max_duration_sec=args.max_duration,
+            progress=None if args.json else _stderr_progress,
+        )
+        window = "latest uploads"
+    elif args.source_cmd == "twitch":
+        if args.category:
+            items = twitch.category_clips(
+                args.category, limit=args.limit, days=args.days,
+                min_duration_sec=args.min_duration, max_duration_sec=args.max_duration,
+            )
+            window = f"top clips, last {args.days} d"
+        else:
+            items = twitch.channel_clips(
+                args.channel, limit=args.limit,
+                min_duration_sec=args.min_duration, max_duration_sec=args.max_duration,
+                progress=None if args.json else _stderr_progress,
+            )
+            # Stated, not guessed: yt-dlp ignores the period filter.
+            window = twitch.CHANNEL_CLIP_WINDOW
+    else:  # pragma: no cover - argparse enforces the choices
+        raise SystemExit(f"unknown source {args.source_cmd}")
+
+    if args.new_only:
+        items = sources_common.unseen(items)
+
+    if args.json:
+        print(json.dumps({"window": window, "items": [i.to_json() for i in items]}))
+        return 0
+
+    if not items:
+        print("nothing matched (try --min-duration / --max-duration)", file=sys.stderr)
+        return 0
+    print(f"{len(items)} candidate(s) — {window}", file=sys.stderr)
+    for item in items:
+        print(f"{item.url}\t{item.summary()}")
+    return 0
+
+
+def _stderr_progress(fraction: float, message: str) -> None:
+    if fraction == -1:
+        print(message, file=sys.stderr)
+
+
 def cmd_edit(args: argparse.Namespace) -> int:
     """Per-clip editing verbs. All output is JSON on stdout for the app."""
     from pathlib import Path
@@ -149,12 +285,12 @@ def cmd_edit(args: argparse.Namespace) -> int:
         return 0
 
     if args.edit_cmd == "suggest-visuals":
-        score = json.loads((job_dir / "score.json").read_text())["data"]
+        score = json.loads((job_dir / "score.json").read_text(encoding="utf-8"))["data"]
         clip = score["clips"][args.clip]
         edit = store.edit_for_clip(job_dir, args.clip, clip)
         # plan against OUTPUT-time words = current bounds without dead-space
         # (suggestions land on the source-bounds timeline the UI shows)
-        diarize = json.loads((job_dir / "diarize.json").read_text())["data"]
+        diarize = json.loads((job_dir / "diarize.json").read_text(encoding="utf-8"))["data"]
         words = [
             {"word": w["word"], "start": w["start"] - edit.start, "end": w["end"] - edit.start}
             for seg in diarize["segments"]
@@ -316,6 +452,67 @@ def main(argv: list[str] | None = None) -> int:
     p_rcl.add_argument("job_id")
     p_rcl.add_argument("clip", type=int)
     p_edit.set_defaults(fn=cmd_edit)
+
+    p_auto = sub.add_parser("auto", help="discover → clip → publish, unattended")
+    auto_src = p_auto.add_mutually_exclusive_group(required=True)
+    auto_src.add_argument("--youtube", metavar="CHANNEL", help="@handle, channel id, or URL")
+    auto_src.add_argument("--twitch", metavar="CHANNEL", help="Twitch channel name")
+    p_auto.add_argument("--limit", type=int, default=1, help="how many sources to process")
+    p_auto.add_argument("--clips", type=int, default=3, help="clips kept per source")
+    p_auto.add_argument("--min-score", type=float, default=5.5)
+    p_auto.add_argument(
+        "--publish", default="dry-run", choices=["dry-run", "composio", "postiz"],
+        help="dry-run posts nothing and reports what would go out (default)",
+    )
+    p_auto.add_argument(
+        "--platforms", default="instagram",
+        help="comma-separated: instagram, tiktok, youtube",
+    )
+    p_auto.add_argument(
+        "--visibility", default="private", choices=["private", "unlisted", "public"],
+        help="private by default; instagram has no private mode and will refuse it",
+    )
+    p_auto.add_argument("--llm", choices=llm_mod.available_modes(), default=None)
+    p_auto.add_argument("--captions", default=None)
+    p_auto.add_argument(
+        "--include-seen", action="store_true",
+        help="re-process sources the job queue already has",
+    )
+    p_auto.add_argument("--jsonl", action="store_true")
+    p_auto.set_defaults(fn=cmd_auto)
+
+    p_sources = sub.add_parser("sources", help="discover what to clip (downloads nothing)")
+    src_sub = p_sources.add_subparsers(dest="source_cmd", required=True)
+
+    p_yt = src_sub.add_parser("youtube", help="a channel's recent uploads (no API key)")
+    p_yt.add_argument("channel", help="@handle, channel id, or a youtube.com URL")
+    p_yt.add_argument("--limit", type=int, default=10)
+    p_yt.add_argument("--min-duration", type=float, default=120.0, help="seconds; 0 disables")
+    p_yt.add_argument("--max-duration", type=float, default=4 * 3600.0, help="seconds; 0 disables")
+
+    p_tw = src_sub.add_parser("twitch", help="clips from a channel (no key) or a category (needs one)")
+    p_tw.add_argument("channel", nargs="?", help="channel name; omit when using --category")
+    p_tw.add_argument("--category", help="Twitch category name, e.g. 'Just Chatting' (needs API credentials)")
+    p_tw.add_argument("--days", type=int, default=7, help="category mode only")
+    p_tw.add_argument("--limit", type=int, default=10)
+    p_tw.add_argument("--min-duration", type=float, default=20.0, help="seconds; 0 disables")
+    p_tw.add_argument("--max-duration", type=float, default=600.0, help="seconds; 0 disables")
+
+    p_scan = src_sub.add_parser(
+        "scan", help="how crowded the clip scene around a creator looks (heuristic)"
+    )
+    p_scan.add_argument("creator", help="creator name as an audience would search it")
+    p_scan.add_argument("--per-query", type=int, default=12)
+    p_scan.add_argument("--channel", help="their YouTube channel, if the name does not resolve to it")
+    p_scan.add_argument(
+        "--no-audience", action="store_true",
+        help="skip the reach measurement (faster, but 'open' stops being meaningful)",
+    )
+
+    for parser_ in (p_yt, p_tw, p_scan):
+        parser_.add_argument("--new-only", action="store_true", help="drop what the job queue already has")
+        parser_.add_argument("--json", action="store_true")
+    p_sources.set_defaults(fn=cmd_sources)
 
     p_ig = sub.add_parser("ig", help="Instagram feedback loop (your own Meta app)")
     ig_sub = p_ig.add_subparsers(dest="ig_cmd", required=True)

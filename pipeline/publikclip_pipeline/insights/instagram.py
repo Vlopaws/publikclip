@@ -69,7 +69,7 @@ def load_connection() -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -77,7 +77,7 @@ def load_connection() -> dict | None:
 def save_connection(data: dict) -> None:
     path = _store_path()
     config.ensure_home()
-    path.write_text(json.dumps(data, indent=1))
+    path.write_text(json.dumps(data, indent=1), encoding="utf-8")
     path.chmod(0o600)
 
 

@@ -43,7 +43,7 @@ class RenderStage(Stage):
         src_w, src_h = int(probe["width"]), int(probe["height"])
         segments = diarize["segments"]
         timeline = events["timeline"]
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves = json.loads(Path(events["curves_path"]).read_text(encoding="utf-8"))
         rms = curves["rms"]
         grid = float(curves["grid_sec"])
 
@@ -60,7 +60,7 @@ class RenderStage(Stage):
             traj_path = camera["trajectories"].get(str(i))
             if not traj_path or not Path(traj_path).exists():
                 continue
-            trajectory = json.loads(Path(traj_path).read_text())
+            trajectory = json.loads(Path(traj_path).read_text(encoding="utf-8"))
             start, end = clip["start"], clip["end"]
             ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
 
@@ -89,7 +89,7 @@ class RenderStage(Stage):
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
                 ass_mod.build_ass(words, clip_events, preset_name=preset, emoji_ok=emoji_ok)
-            )
+            , encoding="utf-8")
 
             out_path = out_dir / f"clip_{i:02d}.mp4"
             try:

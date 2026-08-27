@@ -36,7 +36,7 @@ look at video frames.
 |---|---|---|---|
 | `gemini` | what the rubric was tuned against | yes | `aistudio.google.com` |
 | `nvidia` | open models on NVIDIA-hosted GPUs, free tier needs no card | yes | `build.nvidia.com` |
-| `openrouter` | one key, most models | yes | `openrouter.ai/keys` |
+| `openrouter` | `stealth/ox-alpha` (reasoning) + a multimodal model for frames | yes | `openrouter.ai/keys` |
 | `openai` | paid only | yes | `platform.openai.com` |
 | `groq` | very fast, text only | no | `console.groq.com` |
 | `ollama` | fully local, free, nothing leaves the machine | no | — |
@@ -55,6 +55,11 @@ code:
 ```sh
 PUBLIKCLIP_LLM_MODEL=meta/llama-3.3-70b-instruct publikclip run <url> --llm nvidia
 ```
+
+Reasoning models are asked for `low` effort by default where the provider
+supports it. Thinking is spent on every one of the ~60 calls a source costs,
+so it is a knob: `PUBLIKCLIP_LLM_REASONING=high` to deliberate harder,
+`=off` to stop paying for it.
 
 For an endpoint with no preset — a self-hosted vLLM, LM Studio, Together,
 DeepSeek — use `custom`:

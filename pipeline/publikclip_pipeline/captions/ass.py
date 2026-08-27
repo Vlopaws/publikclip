@@ -296,7 +296,7 @@ def emoji_probe(fonts_dir: Path = FONTS_DIR) -> bool:
                 "100,100,0,0,1,0,0,5,0,0,0,1\n\n[Events]\n"
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Text\n"
                 f"Dialogue: 0,0:00:00.00,0:00:01.00,D,,0,0,0,{text}\n"
-            )
+            , encoding="utf-8")
             out = Path(tmp) / f"probe_{len(results)}.png"
             proc = subprocess.run(
                 [

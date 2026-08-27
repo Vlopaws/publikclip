@@ -162,7 +162,7 @@ class EventsStage(Stage):
         curves["arousal_source"] = arousal_source
 
         curves_path = ctx.job_dir / "curves.json"
-        curves_path.write_text(json.dumps(curves))
+        curves_path.write_text(json.dumps(curves), encoding="utf-8")
 
         by_type: dict[str, int] = {}
         for event in timeline:

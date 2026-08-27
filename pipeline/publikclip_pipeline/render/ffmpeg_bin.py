@@ -217,6 +217,35 @@ def _ensure_capable_windows(progress) -> bool:
     return all(dest.exists() for dest in wanted.values())
 
 
+def ensure_on_path(progress=None) -> str | None:
+    """Put the managed ffmpeg on PATH for this process.
+
+    Resolving ffmpeg ourselves only helps the code that asks us. Third-party
+    libraries shell out to a bare `ffmpeg` and fail with a naked
+    "FileNotFoundError: [WinError 2]" that names nothing — whisperx does
+    exactly this to decode audio. Rather than patch each library, make the
+    binary findable the way they all expect.
+
+    Returns the directory added, or None if no ffmpeg could be produced.
+    """
+    path = ffmpeg()
+    if not os.path.exists(path):
+        found = shutil.which(path)
+        if found:
+            path = found
+        else:
+            ensure_capable(progress)
+            resolve.cache_clear()
+            path = ffmpeg()
+    if not os.path.exists(path):
+        return None
+    directory = str(Path(path).parent)
+    current = os.environ.get("PATH", "")
+    if directory not in current.split(os.pathsep):
+        os.environ["PATH"] = directory + os.pathsep + current
+    return directory
+
+
 def ensure_capable(progress=None) -> bool:
     """If no libass ffmpeg exists anywhere, download a static build once
     into PUBLIKCLIP_HOME/bin (macOS arm64/x86_64, Windows x64), then
