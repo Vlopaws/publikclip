@@ -35,6 +35,12 @@ gcloud services enable compute.googleapis.com iap.googleapis.com \
 # Deliberately no external HTTP/HTTPS tags: the instance keeps its outbound
 # access (it downloads videos and models) and accepts nothing inbound except
 # IAP-brokered SSH.
+#
+# And no service account at all. The default Compute one carries Editor on
+# the project, so cloud-platform scope would let anything running here act
+# as project editor — on a box whose whole job is downloading and decoding
+# video from the open internet through yt-dlp and ffmpeg. The pipeline calls
+# no Google API: scoring is NVIDIA, transcription Groq, publishing Composio.
 gcloud compute instances create "$NAME" \
   --project "$PROJECT" \
   --zone "$ZONE" \
@@ -45,7 +51,7 @@ gcloud compute instances create "$NAME" \
   --boot-disk-type pd-balanced \
   --metadata-from-file startup-script=./startup.sh \
   --metadata "publikclip-repo=${REPO_URL},publikclip-ref=${REPO_REF}" \
-  --scopes cloud-platform \
+  --no-service-account --no-scopes \
   --labels app=publikclip
 
 # IAP brokers SSH without the instance holding a public SSH port open.

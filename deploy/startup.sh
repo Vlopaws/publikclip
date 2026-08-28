@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs once, on the instance's first boot, as root.
 #
-# Installs what the pipeline needs to run unattended: Docker for the Postiz
-# stack, uv for the Python environment, and a system ffmpeg so neither our
-# code nor whisperx has to hunt for one.
+# Installs what the pipeline needs to run unattended: uv for the Python
+# environment, and a system ffmpeg so neither our code nor whisperx has to
+# hunt for one. Docker comes along because the day a self-hosted publisher
+# earns its keep, it should not need a second setup pass.
 #
 # No local model server: scoring runs on NVIDIA Build and transcription on
 # Groq, both hosted. Running an 8B model here would cost GPU hours to get a
@@ -58,18 +59,13 @@ if [ -d "$APP_HOME/src/pipeline" ]; then
   sudo -u "$APP_USER" bash -lc "cd $APP_HOME/src/pipeline && \$HOME/.local/bin/uv sync"
 fi
 
-# --- Postiz ---------------------------------------------------------------
-# Cloned rather than vendored: its compose file is maintained upstream and
-# pinning a snapshot here would rot.
-sudo -u "$APP_USER" git clone --depth 1 \
-  https://github.com/gitroomhq/postiz-docker-compose.git "$APP_HOME/postiz" || true
-
-if [ -f "$APP_HOME/postiz/docker-compose.yaml" ]; then
-  # The shipped compose carries a placeholder JWT secret in plain text.
-  SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n=+/')"
-  sed -i "s|random string that is unique to every install - just type random characters here!|${SECRET}|" \
-    "$APP_HOME/postiz/docker-compose.yaml"
-  sudo -u "$APP_USER" bash -lc "cd $APP_HOME/postiz && docker compose up -d"
+# --- Composio ------------------------------------------------------------
+# Publishing goes through Composio rather than a self-hosted Postiz: Postiz
+# is seven always-on containers, and a queue to review posts in solves a
+# problem that only appears at volume. Until then it would be RAM held for
+# nothing.
+if [ -d "$APP_HOME/src/pipeline" ]; then
+  sudo -u "$APP_USER" bash -lc "cd $APP_HOME/src/pipeline && \$HOME/.local/bin/uv add composio"
 fi
 
 echo "=== setup finished $(date -Is) ==="
