@@ -18,9 +18,27 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Composite score below which a clip is not worth an audience's attention.
-# A design value, not a measurement — the same feedback loop that fits the
-# scoring constants should eventually fit this too.
-DEFAULT_MIN_SCORE = 5.5
+#
+# The scale is 0-100: rubric.composite averages the normalised subscores,
+# the interest curve and the visual pass, then multiplies by 100. So 50 is
+# not a round number picked to feel strict — it is literally half marks on
+# the weighted rubric, and the rubric itself says 8-out-of-10 on any single
+# dimension should be rare.
+#
+# The first version of this said 5.5, reading a 0-100 number as though it
+# were 0-10. Nothing failed: the floor simply never rejected anything, and
+# an unattended run would have published every clip it rendered, including
+# the ones a human called bad. A filter that silently passes everything is
+# worse than no filter, because it looks like one.
+#
+# Still a design value, to be fitted from real outcomes the way the
+# cross-validation constants are.
+DEFAULT_MIN_SCORE = 50.0
+
+# A caller passing something on the 0-10 scale means the units mistake
+# above, not a deliberately permissive run — 8 would be the third percentile
+# here, which nobody asks for on purpose.
+_SUSPICIOUS_SCALE = 10.0
 
 # Vertical clips much past a minute lose completion rate on every platform.
 DEFAULT_MAX_DURATION = 90.0
@@ -86,6 +104,13 @@ def select(
     artifacts are the source of truth in this pipeline, and a resumed job
     should select identically to a fresh one.
     """
+    if 0 < min_score < _SUSPICIOUS_SCALE:
+        raise ValueError(
+            f"min_score={min_score} looks like a 0-10 value, but composite "
+            f"scores run 0-100 (see rubric.composite). Use ~{min_score * 10:.0f} "
+            "to mean the same thing, or 0 to disable the floor."
+        )
+
     render = _read(job_dir, "render")
     score = _read(job_dir, "score")
     # render.stage enumerates score.json's clips, so output["clip"] is the

@@ -459,7 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     auto_src.add_argument("--twitch", metavar="CHANNEL", help="Twitch channel name")
     p_auto.add_argument("--limit", type=int, default=1, help="how many sources to process")
     p_auto.add_argument("--clips", type=int, default=3, help="clips kept per source")
-    p_auto.add_argument("--min-score", type=float, default=5.5)
+    p_auto.add_argument(
+        "--min-score", type=float, default=50.0,
+        help="composite floor on the 0-100 scale; 0 disables it",
+    )
     p_auto.add_argument(
         "--publish", default="dry-run", choices=["dry-run", "composio", "postiz"],
         help="dry-run posts nothing and reports what would go out (default)",

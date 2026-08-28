@@ -52,8 +52,8 @@ def _clip(**kw):
 
 
 def test_only_clips_above_the_floor_are_selected(tmp_path):
-    job_dir = _job_dir(tmp_path, [_out(0, 8.0), _out(1, 3.0), _out(2, 6.0)])
-    chosen = select.select("j1", job_dir, take=5, min_score=5.5)
+    job_dir = _job_dir(tmp_path, [_out(0, 80.0), _out(1, 30.0), _out(2, 60.0)])
+    chosen = select.select("j1", job_dir, take=5, min_score=55.0)
     assert [c.clip for c in chosen] == [0, 2]
 
 
@@ -546,3 +546,36 @@ def test_postiz_says_when_the_stack_is_down(monkeypatch, tmp_path):
     with pytest.raises(publish_mod.PublishError) as err:
         pub.integrations()
     assert "docker compose ps" in str(err.value)
+
+
+# --- the selection floor's scale -------------------------------------------
+
+
+def test_the_floor_sits_on_the_hundred_point_scale():
+    """rubric.composite multiplies a 0-1 average by 100. The first version of
+    this default read that as 0-10, so the floor never rejected anything and
+    an unattended run would have published every clip it rendered."""
+    assert select.DEFAULT_MIN_SCORE == 50.0
+
+
+def test_a_zero_to_ten_floor_is_refused_as_a_units_mistake(tmp_path):
+    """Nobody asks for a third-percentile floor on purpose."""
+    with pytest.raises(ValueError) as err:
+        select.select("j1", tmp_path, min_score=5.5)
+    assert "0-100" in str(err.value)
+    assert "55" in str(err.value), "the message should say what was meant"
+
+
+def test_zero_still_disables_the_floor(tmp_path):
+    job_dir = _job_dir(tmp_path, [_out(0, 3.0)])
+    assert len(select.select("j1", job_dir, min_score=0)) == 1
+
+
+def test_the_default_floor_keeps_the_good_clips_and_drops_the_bad(tmp_path):
+    """The scores a real job produced, and the judgement a human gave them."""
+    job_dir = _job_dir(
+        tmp_path,
+        [_out(0, 52.9), _out(1, 50.9), _out(2, 49.7), _out(3, 26.5), _out(4, 22.9)],
+    )
+    kept = [c.clip for c in select.select("j1", job_dir, take=10)]
+    assert kept == [0, 1], "the floor should keep what the operator called good"
