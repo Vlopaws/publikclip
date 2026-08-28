@@ -48,9 +48,21 @@ id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --create-home --home-dir "
 usermod -aG docker "$APP_USER"
 
 # --- the project ----------------------------------------------------------
+# Compute Engine re-runs this script on every boot, so it has to be safe to
+# run twice. The first version was not: `git clone` onto an existing
+# directory fails, and with `set -e` that took the rest of the setup with it.
 if [ -n "$REPO_URL" ]; then
-  sudo -u "$APP_USER" git clone --branch "${REPO_REF:-main}" "$REPO_URL" "$APP_HOME/src" || \
-    sudo -u "$APP_USER" git clone "$REPO_URL" "$APP_HOME/src"
+  if [ -d "$APP_HOME/src/.git" ]; then
+    sudo -u "$APP_USER" git -C "$APP_HOME/src" fetch --all --prune || true
+    sudo -u "$APP_USER" git -C "$APP_HOME/src" checkout "${REPO_REF:-main}" || true
+    sudo -u "$APP_USER" git -C "$APP_HOME/src" pull --ff-only || true
+  else
+    # A ref that exists only on someone's laptop is not an error worth
+    # aborting for — fall back to the default branch and let the operator
+    # copy the working tree up.
+    sudo -u "$APP_USER" git clone --branch "${REPO_REF:-main}" "$REPO_URL" "$APP_HOME/src" ||
+      sudo -u "$APP_USER" git clone "$REPO_URL" "$APP_HOME/src" || true
+  fi
 fi
 
 # uv resolves Python 3.12 and the pipeline's dependencies by itself.

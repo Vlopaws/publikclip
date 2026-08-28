@@ -103,14 +103,21 @@ def test_auth_errors_are_told_apart_from_transport_ones(stderr, expected):
 
 def test_ensure_on_path_makes_a_bare_ffmpeg_resolvable(monkeypatch, tmp_path):
     """whisperx shells out to a bare `ffmpeg`; resolving it only for our own
-    calls left transcription dying on WinError 2 with nothing to go on."""
+    calls left transcription dying on WinError 2 with nothing to go on.
+
+    The binary is named per platform on purpose: shutil.which only appends
+    .exe on Windows, so hard-coding it made this pass locally and fail on
+    the Linux box the pipeline actually runs on.
+    """
     import shutil as real_shutil
 
     from publikclip_pipeline.render import ffmpeg_bin
 
-    managed = tmp_path / "bin" / "ffmpeg.exe"
+    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    managed = tmp_path / "bin" / name
     managed.parent.mkdir(parents=True)
     managed.write_bytes(b"binary")
+    managed.chmod(0o755)
     monkeypatch.setattr(ffmpeg_bin, "ffmpeg", lambda: str(managed))
     monkeypatch.setenv("PATH", "")
 
@@ -122,7 +129,7 @@ def test_ensure_on_path_makes_a_bare_ffmpeg_resolvable(monkeypatch, tmp_path):
 def test_ensure_on_path_does_not_duplicate_entries(monkeypatch, tmp_path):
     from publikclip_pipeline.render import ffmpeg_bin
 
-    managed = tmp_path / "bin" / "ffmpeg.exe"
+    managed = tmp_path / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     managed.parent.mkdir(parents=True)
     managed.write_bytes(b"binary")
     monkeypatch.setattr(ffmpeg_bin, "ffmpeg", lambda: str(managed))
