@@ -21,7 +21,10 @@ MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
 # Model weights are ~2 GB, but source videos and rendered clips are not small.
 DISK_GB="${DISK_GB:-150}"
 
-REPO_URL="${REPO_URL:-https://github.com/Blueturboguy07/publikclip.git}"
+# The operator's fork, not upstream: upstream is someone else's repository
+# and nothing here can be pushed to it, so an instance pointed at it would
+# forever run code that predates every fix in this tree.
+REPO_URL="${REPO_URL:-https://github.com/Vlopaws/publikclip.git}"
 REPO_REF="${REPO_REF:-hardening-and-llm-backends}"
 
 echo "project      : $PROJECT"
