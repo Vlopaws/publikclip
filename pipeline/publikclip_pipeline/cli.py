@@ -176,11 +176,15 @@ def cmd_sources(args: argparse.Namespace) -> int:
 
     # The help promises "0 disables"; without this it silently means "reject
     # everything longer than zero seconds", which filters out every result.
+    # Only the listing subcommands carry these — `scan` measures a creator
+    # rather than filtering a list, and reading them unconditionally made it
+    # fail before it started.
     def _bound(value):
         return None if not value else value
 
-    args.min_duration = _bound(args.min_duration)
-    args.max_duration = _bound(args.max_duration)
+    for bound in ("min_duration", "max_duration"):
+        if hasattr(args, bound):
+            setattr(args, bound, _bound(getattr(args, bound)))
 
     if args.source_cmd == "scan":
         from .sources import opportunity

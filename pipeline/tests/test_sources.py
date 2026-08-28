@@ -339,3 +339,42 @@ def test_the_two_axes_combine_into_one_verdict(median, saturation_verdict, expec
         creator="X", saturation=_Sat(), median_views=median, uploads_seen=10
     )
     assert assessment.verdict == expected
+
+
+# --- CLI argument handling -------------------------------------------------
+
+
+def test_duration_bounds_are_optional_on_subcommands_that_lack_them():
+    """`scan` measures a creator rather than filtering a list, so it defines
+    no --min-duration. Reading it unconditionally made the command fail
+    before it started."""
+    import argparse
+
+    from publikclip_pipeline import cli
+
+    args = argparse.Namespace(
+        source_cmd="scan", creator="X", per_query=1, channel=None,
+        no_audience=True, json=True, new_only=False,
+    )
+    calls = {}
+
+    class _Report:
+        verdict = "open"
+
+        @staticmethod
+        def to_json():
+            return {"verdict": "open"}
+
+    def fake_saturation(creator, per_query=12, progress=None):
+        calls["creator"] = creator
+        return _Report()
+
+    import publikclip_pipeline.sources.opportunity as opp
+
+    original = opp.clip_saturation
+    opp.clip_saturation = fake_saturation
+    try:
+        assert cli.cmd_sources(args) == 0
+    finally:
+        opp.clip_saturation = original
+    assert calls["creator"] == "X"
