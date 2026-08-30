@@ -13,7 +13,8 @@ from ..models import registry, specs
 
 class CameraStage(Stage):
     name = "camera"
-    schema_version = 1
+    # 2: framing mode (vertical / wide) and the title band it implies.
+    schema_version = 2
 
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("camera_settings") != ctx.settings.camera.__dict__:
@@ -25,6 +26,7 @@ class CameraStage(Stage):
 
         from . import asd as asd_mod
         from . import director
+        from . import framing as framing_mod
         from .detect import FaceDetector
 
         prior = ctx.prior or {}
@@ -60,10 +62,20 @@ class CameraStage(Stage):
             ctx.emit(i / max(1, len(clips)), f"Directing clip {i + 1}/{len(clips)}…")
             analysis = asd_mod.analyze_clip(media, start, end, detector, model, src_w, src_h)
             clip_turns = [t for t in turns if t["end"] > start and t["start"] < end]
+
+            # Shape first: the crop aspect changes what the director is
+            # even aiming, so it cannot be decided after the fact.
+            shape = framing_mod.decide(
+                analysis, forced=getattr(ctx.settings.camera, "framing", None)
+            )
+            ctx.emit(i / max(1, len(clips)), f"Clip {i + 1}: {shape.mode} — {shape.reason}")
+
             traj = director.build_trajectory(
                 analysis, clip_turns, timeline, dynamics, grid,
-                start, end, src_w, src_h, ctx.settings,
+                start, end, src_w, src_h, ctx.settings, mode=shape.mode,
             )
+            face_top = framing_mod.highest_face_in_output(analysis, traj.frames, src_h)
+            band = framing_mod.title_band(shape.mode, face_top)
             out_path = ctx.job_dir / f"trajectory_{i:02d}.json"
             out_path.write_text(
                 json.dumps(
@@ -75,6 +87,14 @@ class CameraStage(Stage):
                         "cuts": traj.cuts,
                         "punches": traj.punches,
                         "meta": traj.meta,
+                        "framing": {
+                            "mode": shape.mode,
+                            "face_coverage": round(shape.face_coverage, 3),
+                            "face_height": round(shape.face_height, 3),
+                            "reason": shape.reason,
+                            "picture_box": list(framing_mod.picture_box(shape.mode)),
+                            "title_band": list(band) if band else None,
+                        },
                     }
                 )
             , encoding="utf-8")
@@ -86,6 +106,9 @@ class CameraStage(Stage):
                     "switch_cuts": traj.meta["switch_cuts"],
                     "shot_cuts": traj.meta["shot_cuts"],
                     "punches": len(traj.punches),
+                    "mode": shape.mode,
+                    "face_coverage": round(shape.face_coverage, 3),
+                    "face_height": round(shape.face_height, 3),
                 }
             )
 

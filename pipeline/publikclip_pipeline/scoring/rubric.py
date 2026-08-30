@@ -278,3 +278,62 @@ def signals_summary(
     if arousal_source != "ser":
         missing.append("ser_model (dsp proxy used)")
     return fired, missing
+
+
+# --- Headline and description ---------------------------------------------
+#
+# Separate from T1 on purpose. T1 runs on every candidate — 35 calls on a
+# twenty-minute source — and only a handful of those survive to be rendered.
+# Writing copy for clips nobody will publish is the kind of waste that only
+# shows up on the invoice, so this runs over the finalists instead, after
+# selection, and its cache key is the clip's own transcript.
+#
+# The title has to earn a tap on a muted, autoplaying feed, and it has to do
+# it inside the band the camera stage found free of faces — roughly two
+# short lines. Ask for more and it gets shrunk until nobody can read it.
+TITLE_MAX_CHARS = 48
+
+HEADLINE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": f"on-screen hook, at most {TITLE_MAX_CHARS} characters",
+        },
+        "description": {
+            "type": "string",
+            "description": "2-3 sentence caption for the post description",
+        },
+        "hashtags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "3-6 lowercase tags, no '#' prefix",
+        },
+    },
+    "required": ["title", "description", "hashtags"],
+}
+
+
+def headline_prompt(transcript_text: str, context: dict) -> str:
+    """Copy for one finalist clip: on-screen title, description, tags.
+
+    Written in the transcript's own language — a French clip with an English
+    title reads as machine output, and the audience it is aimed at is the
+    one that speaks the language being spoken.
+    """
+    return (
+        "You write the on-screen title and description for a short-form clip.\n\n"
+        f"{llm.FENCE_NOTICE}\n\n"
+        f"Clip transcript ({context.get('duration', 0):.0f} seconds):\n"
+        f"{llm.fenced('transcript', transcript_text)}\n\n"
+        "Write in the SAME LANGUAGE as the transcript.\n\n"
+        f"title: the hook burned onto the video. Hard limit {TITLE_MAX_CHARS} "
+        "characters — it has to fit two short lines on a phone. Concrete and "
+        "specific to what is actually said. State the surprising thing rather "
+        "than promising one: 'Microsoft equips 90% of schools' beats 'You "
+        "won't believe what schools use'. No clickbait formulas, no emoji, no "
+        "hashtags, no ALL CAPS, no trailing punctuation.\n"
+        "description: 2-3 sentences for the post caption. First sentence "
+        "carries the searchable terms a person would actually type.\n"
+        "hashtags: 3-6 lowercase tags, no '#', specific over generic."
+    )

@@ -312,6 +312,48 @@ def _ffmpeg_location(progress: ProgressFn) -> str | None:
     return shutil.which("ffmpeg")
 
 
+def sample_section(
+    url: str,
+    out_path: Path,
+    start: float,
+    duration: float,
+    progress: ProgressFn,
+    max_height: int = 480,
+) -> None:
+    """Fetch a short span of a video, small, for measurement only.
+
+    Deliberately not `download`: that one fetches the best available stream
+    because the result gets rendered and published. Here the file exists to
+    be counted — face detection runs at 320x240 — so pulling a 4K master to
+    answer "does this creator point a camera at people" would be absurd.
+    A minute at 480p is a few megabytes and a few seconds.
+    """
+    bin_path = ensure_ytdlp(progress)
+    ffmpeg = _ffmpeg_location(progress)
+    end = start + duration
+    args = [
+        "-f", f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best",
+        "--merge-output-format", "mp4",
+        "--no-playlist",
+        "--no-warnings",
+        "--newline",
+        "--socket-timeout", "30",
+        # Keyframe-accurate cuts cost a full re-encode. The measurement does
+        # not care where exactly the span starts, so let it snap.
+        "--download-sections", f"*{start:.0f}-{end:.0f}",
+    ]
+    if ffmpeg:
+        args += ["--ffmpeg-location", ffmpeg]
+    args += ["-o", str(out_path), url]
+
+    _with_self_update_retry(bin_path, progress, lambda: _run(bin_path, args))
+    if not out_path.exists():
+        candidates = list(out_path.parent.glob(out_path.name + ".*"))
+        if not candidates:
+            raise YtDlpError(f"No sample was produced for {url}.")
+        candidates[0].replace(out_path)
+
+
 def download(url: str, out_path: Path, progress: ProgressFn) -> None:
     bin_path = ensure_ytdlp(progress)
     ffmpeg = _ffmpeg_location(progress)

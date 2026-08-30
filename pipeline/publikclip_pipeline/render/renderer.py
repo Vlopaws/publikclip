@@ -30,6 +30,13 @@ OUT_H = 1920
 X264_CRF = 19
 VT_BITRATE = "10M"
 
+# Wide clips are letterboxed rather than stretched, and the bars are filled
+# with a blurred, over-scaled copy of the same frame. Black bars are the
+# honest alternative and cost nothing, but they read as an upload mistake on
+# a feed where every neighbouring post fills the screen. Sigma is high
+# enough that no detail survives to compete with the picture.
+BLUR_SIGMA = 30
+
 _vt_checked: bool | None = None
 
 
@@ -83,6 +90,56 @@ def sendcmd_lines(boxes: list[tuple[int, int, int, int]], fps: float, target: st
     return lines
 
 
+def _join(parts: list[str]) -> str:
+    """Assemble filter chain segments into one filtergraph string.
+
+    ffmpeg separates filters within a chain by ',' and whole chains by ';'.
+    The vertical path is a single chain and only ever needs commas; the wide
+    path splits into labelled branches and needs both. Rather than have
+    every caller track which is which, the labels themselves say it: a
+    segment that opens with '[' starts a new chain, and one that closes with
+    ']' ends the previous one.
+    """
+    out = ""
+    for part in parts:
+        if not out:
+            out = part
+            continue
+        sep = ";" if (part.startswith("[") or out.endswith("]")) else ","
+        out += sep + part
+    return out
+
+
+def _compose(mode: str, first_box: tuple[int, int, int, int]) -> list[str]:
+    """The filter chain from decoded frames to a full 1080x1920 canvas.
+
+    Vertical is a straight scale: the crop already has the canvas aspect.
+    Wide has to place a 4:3 picture inside a 9:16 frame, which means one
+    decode feeding two branches — the picture itself, and the blurred fill
+    behind it. Both branches read the SAME cropped rect, so sendcmd still
+    drives a single crop filter and the two stay in lockstep by
+    construction.
+    """
+    w0, h0, x0, y0 = first_box
+    head = [
+        f"crop@c=w={w0}:h={h0}:x={x0}:y={y0}",
+    ]
+    if mode != "wide":
+        return head + [f"scale={OUT_W}:{OUT_H}:flags=lanczos", "setsar=1"]
+
+    pic_h = int(round(OUT_W * 3 / 4))
+    pic_h -= pic_h % 2
+    top = (OUT_H - pic_h) // 2
+    return head + [
+        "split=2[wide_fg][wide_bg]",
+        f"[wide_bg]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
+        f"crop={OUT_W}:{OUT_H},gblur=sigma={BLUR_SIGMA}[wide_bgb]",
+        f"[wide_fg]scale={OUT_W}:{pic_h}:flags=lanczos[wide_fgs]",
+        f"[wide_bgb][wide_fgs]overlay=0:{top}",
+        "setsar=1",
+    ]
+
+
 def _q(path: str) -> str:
     """ffmpeg filter-option quoting: single quotes make the value literal;
     an embedded quote closes, escapes, reopens ('\\'').
@@ -111,6 +168,7 @@ def render_clip(
     src_w: int = 1920,
     src_h: int = 1080,
     timeout: float = 1800.0,
+    mode: str = "vertical",
 ) -> None:
     duration = clip_end - clip_start
     boxes = crop_boxes(trajectory["frames"], src_w, src_h)
@@ -121,18 +179,16 @@ def render_clip(
     cmd_path = out_path.with_suffix(".cmd")
     cmd_path.write_text("\n".join(sendcmd_lines(boxes, fps)) + "\n", encoding="utf-8")
 
-    w0, h0, x0, y0 = boxes[0]
-    vf_parts = [
-        f"sendcmd=f={_q(cmd_path)}",
-        f"crop@c=w={w0}:h={h0}:x={x0}:y={y0}",
-        f"scale={OUT_W}:{OUT_H}:flags=lanczos",
-        "setsar=1",
-    ]
+    vf_parts = [f"sendcmd=f={_q(cmd_path)}"] + _compose(mode, boxes[0])
     if ass_path is not None:
         sub = f"subtitles=filename={_q(ass_path)}"
         if fonts_dir is not None:
             sub += f":fontsdir={_q(fonts_dir)}"
         vf_parts.append(sub)
+
+    # Chain segments are joined with ',' except where a segment already ends
+    # a labelled branch — those are separate graph statements and take ';'.
+    graph = _join(vf_parts)
 
     if videotoolbox_available():
         vcodec = ["-c:v", "h264_videotoolbox", "-b:v", VT_BITRATE, "-allow_sw", "1"]
@@ -143,7 +199,7 @@ def render_clip(
         ffmpeg_bin.ffmpeg(), "-y", "-v", "error",
         "-ss", f"{clip_start:.3f}", "-t", f"{duration:.3f}",
         "-i", media_path,
-        "-vf", ",".join(vf_parts),
+        "-vf", graph,
         "-af", f"loudnorm=I={lufs}:TP={true_peak}:LRA=11",
         *vcodec,
         "-pix_fmt", "yuv420p",

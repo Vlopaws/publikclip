@@ -11,7 +11,8 @@ from ..jobs.queue import Stage, StageContext, StageError
 
 class RenderStage(Stage):
     name = "render"
-    schema_version = 1
+    # 2: framing mode (vertical / wide) and the title band it implies.
+    schema_version = 2
 
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("caption_preset") != ctx.settings.caption_preset:
@@ -22,6 +23,8 @@ class RenderStage(Stage):
         import numpy as np
 
         from ..captions import ass as ass_mod
+        from ..scoring import llm as llm_mod
+        from ..scoring import rubric
         from . import ffmpeg_bin, renderer
 
         if not ffmpeg_bin.supports_captions():
@@ -50,6 +53,15 @@ class RenderStage(Stage):
         captions_ok = ffmpeg_bin.supports_captions()
         emoji_ok = ass_mod.emoji_probe() if captions_ok else False
         ctx.emit(-1, f"Emoji support: {'yes' if emoji_ok else 'no (dropping emoji)'}")
+
+        # Copy is written per finalist, not per candidate — see
+        # rubric.headline_prompt. A failure here must never lose a clip: a
+        # video without a title is a video, a raised exception is nothing.
+        headline_client = None
+        try:
+            headline_client = llm_mod.make_client(ctx.settings.llm_mode)
+        except llm_mod.LlmError as err:
+            ctx.emit(-1, f"No titles this run ({err})")
 
         out_dir = ctx.job_dir / "clips"
         out_dir.mkdir(exist_ok=True)
@@ -86,9 +98,33 @@ class RenderStage(Stage):
                 for e in timeline
                 if e["end"] > start and e["start"] < end and e["type"] != "pause"
             ]
+            framing = trajectory.get("framing") or {}
+            mode = framing.get("mode", "vertical")
+            band = framing.get("title_band")
+            band = tuple(band) if band else None
+
+            copy = {}
+            if headline_client is not None and band:
+                spoken = " ".join(w.text for w in words)
+                try:
+                    copy = headline_client.generate_json(
+                        rubric.headline_prompt(spoken, {"duration": end - start}),
+                        rubric.HEADLINE_SCHEMA,
+                    )
+                except Exception as err:  # noqa: BLE001 — copy is optional
+                    ctx.emit(-1, f"clip {i + 1}: no title ({err})")
+
+            title = (copy.get("title") or "").strip() or None
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
-                ass_mod.build_ass(words, clip_events, preset_name=preset, emoji_ok=emoji_ok)
+                ass_mod.build_ass(
+                    words, clip_events, preset_name=preset, emoji_ok=emoji_ok,
+                    title=title, title_band=band, clip_duration=end - start,
+                    # A wide clip's band is an empty bar; a vertical clip's
+                    # band is borrowed picture. Only the first can afford to
+                    # hold the title for the whole runtime.
+                    hold_whole_clip=(mode == "wide"),
+                )
             , encoding="utf-8")
 
             out_path = out_dir / f"clip_{i:02d}.mp4"
@@ -98,7 +134,7 @@ class RenderStage(Stage):
                     ass_path if captions_ok else None, ass_mod.FONTS_DIR,
                     lufs=ctx.settings.lufs_target,
                     true_peak=ctx.settings.true_peak_db,
-                    src_w=src_w, src_h=src_h,
+                    src_w=src_w, src_h=src_h, mode=mode,
                 )
             except RuntimeError as err:
                 raise StageError(str(err)) from err
@@ -118,6 +154,10 @@ class RenderStage(Stage):
                     "duration": round(check["duration"], 2),
                     "words": len(words),
                     "event_tags": len(clip_events),
+                    "mode": mode,
+                    "title": title,
+                    "description": (copy.get("description") or "").strip() or None,
+                    "hashtags": copy.get("hashtags") or [],
                 }
             )
 

@@ -119,6 +119,10 @@ class CameraSettings:
     punch_in: bool = True
     punch_in_sensitivity: float = 1.0  # scales event/energy trigger thresholds
     zoom_lock_per_scene: bool = True
+    # None = decide per clip from what the ASD pass measured (see
+    # camera.framing). "vertical" or "wide" pins every clip to one shape,
+    # for material the operator already knows the answer for.
+    framing: str | None = None
 
 
 @dataclass

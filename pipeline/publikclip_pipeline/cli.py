@@ -186,6 +186,32 @@ def cmd_sources(args: argparse.Namespace) -> int:
         if hasattr(args, bound):
             setattr(args, bound, _bound(getattr(args, bound)))
 
+    if args.source_cmd == "probe":
+        from .sources import clippability
+
+        emit = None if args.json else _stderr_progress
+        report = clippability.assess(
+            args.channel, videos=args.videos, progress=emit
+        )
+        if args.json:
+            print(json.dumps(report.to_json(), indent=2, ensure_ascii=False))
+            return 0
+        print(f"{report.creator}: {report.verdict} — {report.advice}")
+        print(
+            f"  faces in {report.face_coverage:.0%} of sampled frames, "
+            f"{report.face_height:.0%} of frame height, "
+            f"{report.vertical_share:.0%} would cut vertical"
+        )
+        for sample in report.samples:
+            if sample.error:
+                print(f"  - {sample.title[:56]}: {sample.error}")
+            else:
+                print(
+                    f"  - {sample.title[:56]}: {sample.face_coverage:.0%} faces, "
+                    f"{sample.mode}"
+                )
+        return 0
+
     if args.source_cmd == "scan":
         from .sources import opportunity
 
@@ -505,6 +531,16 @@ def main(argv: list[str] | None = None) -> int:
     p_tw.add_argument("--min-duration", type=float, default=20.0, help="seconds; 0 disables")
     p_tw.add_argument("--max-duration", type=float, default=600.0, help="seconds; 0 disables")
 
+    p_probe = src_sub.add_parser(
+        "probe",
+        help="is a creator's material face-driven enough to clip? (samples video)",
+    )
+    p_probe.add_argument("channel", help="@handle, channel id, or URL")
+    p_probe.add_argument(
+        "--videos", type=int, default=2,
+        help="how many recent uploads to sample (a minute of each)",
+    )
+
     p_scan = src_sub.add_parser(
         "scan", help="how crowded the clip scene around a creator looks (heuristic)"
     )
@@ -516,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the reach measurement (faster, but 'open' stops being meaningful)",
     )
 
-    for parser_ in (p_yt, p_tw, p_scan):
+    for parser_ in (p_yt, p_tw, p_scan, p_probe):
         parser_.add_argument("--new-only", action="store_true", help="drop what the job queue already has")
         parser_.add_argument("--json", action="store_true")
     p_sources.set_defaults(fn=cmd_sources)

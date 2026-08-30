@@ -18,7 +18,7 @@ ensemble over 1–6 s windows, ±2-frame mean smoothing. Logit > 0 = speaking.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -51,6 +51,12 @@ class ScoredTrack:
     centres_y: list[float]
     areas: list[float]
     scores: list[float]    # ASD logits, > 0 = speaking
+    # Height and top edge, 0..1 of frame height. Area alone cannot answer
+    # "does a head survive this crop" — a wide face and a tall one share an
+    # area — and the title placer needs to know where the highest face
+    # actually starts. Both come free from boxes we already have.
+    heights: list[float] = field(default_factory=list)
+    tops: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -249,6 +255,8 @@ def analyze_clip(
                 centres_y=[b.cy for b in track.boxes[:frames]],
                 areas=[b.area for b in track.boxes[:frames]],
                 scores=scores,
+                heights=[max(0.0, b.y2 - b.y1) for b in track.boxes[:frames]],
+                tops=[b.y1 for b in track.boxes[:frames]],
             )
         )
     return AsdAnalysis(scored, frame_count, scene_cuts, ASD_FPS)

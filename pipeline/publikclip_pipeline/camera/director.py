@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..vendor.clippyme.reframe_ops import build_smoothed_trajectory
+from . import framing as framing_mod
 from .asd import ASD_FPS, AsdAnalysis
 
 RATIO_MARGIN = 1.5
@@ -314,8 +315,17 @@ def build_trajectory(
     src_w: int,
     src_h: int,
     camera: "object",
+    mode: str = "vertical",
 ) -> Trajectory:
-    """The full director pass for one clip → per-frame crop rects."""
+    """The full director pass for one clip → per-frame crop rects.
+
+    `mode` picks the crop shape. "wide" is not just a different aspect: it
+    also parks the camera. A 4:3 window over a 16:9 source leaves 480 px of
+    horizontal play, and spending it on speaker-following swings the shared
+    screen — the thing the wide cut exists to show — from side to side.
+    Wide is a tripod: centred, unzoomed, no punch-ins.
+    """
+    wide = mode == "wide"
     fps = ASD_FPS
     n = analysis.frame_count or int((clip_end - clip_start) * fps)
 
@@ -354,20 +364,25 @@ def build_trajectory(
             timeline, energy_dynamics, dynamics_grid, clip_start, clip_end,
             sensitivity=getattr(settings, "punch_in_sensitivity", 1.0),
         )
-        if getattr(settings, "punch_in", True)
+        if getattr(settings, "punch_in", True) and not wide
         else []
     )
     env = punch_envelope(n, fps, punches)
 
-    # Crop geometry: full-height 9:16 window, zoom tightens it.
+    # Crop geometry: full-height window at the mode's aspect, zoom tightens
+    # it. A source narrower than the target aspect gets pillar-fitted on
+    # width instead, so the window never asks for pixels that do not exist.
+    aspect = framing_mod.crop_aspect(mode)
     base_h = float(src_h)
-    base_w = base_h * 9.0 / 16.0
-    if base_w > src_w:  # narrower-than-9:16 source: pillar-fit width instead
+    base_w = base_h * aspect
+    if base_w > src_w:
         base_w = float(src_w)
-        base_h = base_w * 16.0 / 9.0
+        base_h = base_w / aspect
     frames = []
     for f in range(n):
         cx, cy, zoom = smoothed[f] if smoothed[f] is not None else (src_w / 2, src_h / 2, 1.0)
+        if wide:
+            cx, cy, zoom = src_w / 2, src_h / 2, 1.0
         z = zoom * env[f]
         w = base_w / z
         h = base_h / z
@@ -385,5 +400,6 @@ def build_trajectory(
             "speakers_canonical": {str(k): [round(v[0], 3), round(v[1], 3)] for k, v in canon.items()},
             "switch_cuts": len(switch_cuts),
             "shot_cuts": len(shot_cuts),
+            "mode": mode,
         },
     )

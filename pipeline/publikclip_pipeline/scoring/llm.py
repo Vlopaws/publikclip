@@ -156,12 +156,23 @@ PROVIDERS: dict[str, Provider] = {
         # (it becomes the clip caption, so that is disqualifying) and Kimi K3
         # took 26 s to Nemotron's 12 s — at ~60 calls per source that is a
         # quarter-hour per video.
-        model="nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        # WARNING, measured 2026-08-30: the id below is the only one in
+        # NVIDIA's current catalogue that returned a schema-conformant
+        # object for T1 — and it took 81 s to do it, against 3.2 s on Groq.
+        # At ~35 calls per source that is three quarters of an hour of
+        # scoring. Free, but not free of cost. Prefer --llm groq.
+        #
+        # The previous id, llama-3.3-nemotron-super-49b-v1.5, was retired
+        # and now answers HTTP 410 Gone. The Nemotron 3 line replaced it but
+        # truncates or malforms JSON under this schema.
+        model="nvidia/nemotron-3.5-lightning-30b-a3b",
         # The strong text models here are not multimodal, so the T2 frame
         # pass gets its own VLM. NVIDIA's structured-generation docs use the
         # Nemotron VL line as their worked example, so guided_json is known
         # to work on it.
-        vision_model="nvidia/nemotron-nano-12b-v2-vl",
+        # nemotron-nano-12b-v2-vl left the catalogue with the text model.
+        # This is what remains there that takes images.
+        vision_model="meta/llama-3.2-90b-vision-instruct",
         key_secret="nvidia_api_key",
         key_env="PUBLIKCLIP_NVIDIA_API_KEY",
         signup="build.nvidia.com — free, no card",
@@ -204,7 +215,18 @@ PROVIDERS: dict[str, Provider] = {
         name="groq",
         label="Groq",
         base_url="https://api.groq.com/openai/v1",
-        model="llama-3.3-70b-versatile",
+        # Chosen the same way as every other model id here: by running the
+        # real T1 and headline prompts against each id the live catalogue
+        # actually serves. gpt-oss-120b returned a complete schema on both
+        # in 3.2 s and 2.1 s; gpt-oss-20b was faster on T1 but slower on the
+        # headline; qwen3.8-27b returned an object missing every required
+        # field, which is the one disqualifying outcome.
+        #
+        # The id this used to name, llama-3.3-70b-versatile, is no longer
+        # served — the client says so in as many words, which is how it was
+        # caught. Hosted catalogues rotate; check
+        # https://api.groq.com/openai/v1/models before trusting an id here.
+        model="openai/gpt-oss-120b",
         key_secret="groq_api_key",
         key_env="PUBLIKCLIP_GROQ_API_KEY",
         signup="console.groq.com/keys",

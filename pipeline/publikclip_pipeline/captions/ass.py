@@ -34,6 +34,26 @@ CHUNK_MAX_WORDS = 4
 CHUNK_PAUSE_BREAK = 0.6
 EMPHASIS_RMS_QUANTILE = 0.85
 
+# --- Title card ----------------------------------------------------------
+# The headline is drawn inside a band the camera stage measured as free of
+# faces. It is never positioned by taste here: give it no band and it is not
+# drawn at all, which is the correct outcome for a clip framed so tightly
+# that any title would sit on someone's face.
+TITLE_MAX_LINES = 2
+TITLE_SIZE = 76
+TITLE_MIN_SIZE = 46
+# Anton and Archivo Black average a little under half their point size per
+# glyph. Deliberately pessimistic: a title that wraps early looks composed,
+# one that overruns the frame looks broken.
+TITLE_CHAR_WIDTH_RATIO = 0.52
+TITLE_SIDE_MARGIN = 60
+TITLE_LINE_SPACING = 1.18
+# In wide mode the band is a real empty bar, so the title can hold for the
+# whole clip — it costs nothing and the bar is otherwise dead space. In
+# vertical mode it shares the picture, so it behaves like a hook: long
+# enough to be read, gone before it becomes furniture.
+TITLE_HOLD_SEC = 4.0
+
 PLAY_RES_X = 1080
 PLAY_RES_Y = 1920
 
@@ -233,16 +253,92 @@ def _chunk_text(chunk: Chunk, active_idx: int | None, preset: Preset, entrance: 
     return " ".join(parts)
 
 
+def fit_title(text: str, band_px: int) -> tuple[list[str], int] | None:
+    """Wrap a headline into at most TITLE_MAX_LINES and pick a size that fits
+    the band both ways. Returns (lines, size), or None if it cannot fit.
+
+    Shrinking is preferred to truncating: a headline cut mid-word is worse
+    than a smaller one, and the LLM is asked for something short in the
+    first place. Below TITLE_MIN_SIZE the text would be unreadable on a
+    phone, so at that point the title is dropped rather than shipped tiny.
+    """
+    words = (text or "").strip().split()
+    if not words or band_px <= 0:
+        return None
+
+    usable = PLAY_RES_X - 2 * TITLE_SIDE_MARGIN
+    size = TITLE_SIZE
+    while size >= TITLE_MIN_SIZE:
+        per_line = max(1, int(usable / (size * TITLE_CHAR_WIDTH_RATIO)))
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= per_line:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        fits_width = all(len(line) <= per_line for line in lines)
+        needed = len(lines) * size * TITLE_LINE_SPACING
+        if len(lines) <= TITLE_MAX_LINES and fits_width and needed <= band_px:
+            return lines, size
+        size -= 6
+    return None
+
+
+def _title_style(preset: Preset, size: int) -> str:
+    """A dedicated style so the headline never inherits caption margins."""
+    return (
+        f"Style: Title,{preset.font},{size},&H00FFFFFF,&H00FFFFFF,"
+        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,5,2,5,"
+        f"{TITLE_SIDE_MARGIN},{TITLE_SIDE_MARGIN},0,1\n"
+    )
+
+
 def build_ass(
     words: list[Word],
     events: list[dict],
     preset_name: str = "classic",
     emoji_ok: bool = False,
+    title: str | None = None,
+    title_band: tuple[int, int] | None = None,
+    clip_duration: float | None = None,
+    hold_whole_clip: bool = False,
 ) -> str:
     """The full ASS document for one clip. `events` carry clip-relative
-    start/end + type; only bus-detected non-speech events become tags."""
+    start/end + type; only bus-detected non-speech events become tags.
+
+    A title is drawn only when both a headline and a band to put it in were
+    supplied, and only if it fits that band — three independent chances to
+    decline, because the failure mode being avoided is text across a face.
+    """
     preset = PRESETS.get(preset_name, PRESETS["classic"])
-    lines = [_header(preset)]
+    header = _header(preset)
+    lines = [header]
+
+    if title and title_band:
+        top, bottom = title_band
+        fitted = fit_title(title, bottom - top)
+        if fitted:
+            text_lines, size = fitted
+            # Insert the style into the header's style block rather than
+            # after [Events], where libass would ignore it.
+            lines[0] = header.replace(
+                "\n[Events]", "\n" + _title_style(preset, size) + "\n[Events]"
+            )
+            centre_y = (top + bottom) // 2
+            end = (clip_duration or TITLE_HOLD_SEC) if hold_whole_clip else TITLE_HOLD_SEC
+            if clip_duration:
+                end = min(end, clip_duration)
+            body = "\\N".join(_esc(line) for line in text_lines)
+            lines.append(
+                f"Dialogue: 2,{_fmt_time(0.0)},{_fmt_time(end)},Title,,0,0,0,"
+                f"{{\\an5\\pos({PLAY_RES_X // 2},{centre_y})}}{body}\n"
+            )
 
     for chunk in chunk_words(words):
         for i, word in enumerate(chunk.words):
