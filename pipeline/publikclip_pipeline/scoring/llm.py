@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -266,6 +267,45 @@ def available_modes() -> list[str]:
     return modes
 
 
+# A rate limit is not a failure, it is a queue. The scoring stage fires one
+# call per candidate as fast as it can — a hundred of them for a two-hour
+# source — against a budget measured per minute, so hitting the limit is the
+# expected steady state on a small tier rather than an exception.
+#
+# What made it fatal was the schedule: three attempts sleeping 1 s then 2 s,
+# against a server asking for 4. Now the server's own number is used when it
+# gives one, and rate limits get their own, larger attempt budget, because
+# waiting is always the right answer to "too fast" and never the right answer
+# to "wrong key".
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_MAX_WAIT = 65.0
+
+_RETRY_HINT = re.compile(r"try again in ([0-9.]+)\s*(ms|s)\b", re.IGNORECASE)
+
+
+def retry_delay(res, attempt: int, detail: str = "") -> float:
+    """How long to wait before retrying a 429.
+
+    Prefers what the server said — the Retry-After header, then the phrasing
+    APIs put in the body — and falls back to exponential backoff. Always
+    slightly more than asked: coming back a millisecond early just spends
+    another attempt.
+    """
+    header = (getattr(res, "headers", None) or {}).get("retry-after")
+    if header:
+        try:
+            return min(RATE_LIMIT_MAX_WAIT, float(header) + 0.5)
+        except (TypeError, ValueError):
+            pass
+    match = _RETRY_HINT.search(detail or "")
+    if match:
+        seconds = float(match.group(1))
+        if match.group(2).lower() == "ms":
+            seconds /= 1000.0
+        return min(RATE_LIMIT_MAX_WAIT, seconds + 0.5)
+    return min(RATE_LIMIT_MAX_WAIT, 2.0 ** attempt)
+
+
 def _error_message(res) -> str | None:
     """The server's own explanation, when it bothered to send one."""
     try:
@@ -387,7 +427,9 @@ class OpenAICompatClient:
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
 
         last_err: Exception | None = None
-        for attempt in range(3):
+        rate_limited = 0
+        hard_failures = 0
+        for attempt in range(3 + RATE_LIMIT_ATTEMPTS):
             try:
                 res = httpx.post(
                     f"{self.provider.base_url}/chat/completions",
@@ -407,13 +449,14 @@ class OpenAICompatClient:
                 if res.status_code == 429:
                     import time
 
-                    # Same reasoning as the Gemini path: a rate-limit backoff
-                    # and an exhausted quota are both bare 429s but need
-                    # opposite actions, so surface the server's own words.
+                    # A rate-limit backoff and an exhausted quota are both
+                    # bare 429s but need opposite actions, so surface the
+                    # server's own words either way.
                     detail = _error_message(res) or "rate limited"
-                    if attempt == 2:
+                    rate_limited += 1
+                    if rate_limited >= RATE_LIMIT_ATTEMPTS:
                         raise LlmError(f"{self.provider.label}: {detail}")
-                    time.sleep(2**attempt)
+                    time.sleep(retry_delay(res, rate_limited, detail))
                     continue
                 res.raise_for_status()
                 text = res.json()["choices"][0]["message"]["content"] or ""
@@ -435,7 +478,8 @@ class OpenAICompatClient:
                 raise
             except (httpx.HTTPError, KeyError, json.JSONDecodeError, IndexError) as err:
                 last_err = err
-                if attempt == 2:
+                hard_failures += 1
+                if hard_failures >= 3:
                     raise LlmError(
                         f"{self.provider.label} call failed after 3 attempts: {err}"
                     ) from err
