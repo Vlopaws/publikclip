@@ -20,50 +20,98 @@ import pytest
 from publikclip_pipeline.render import ffmpeg_bin
 
 
+def _record(monkeypatch, rc=0):
+    """Capture both ffmpeg invocations the probe makes.
+
+    The probe encodes a sample and then reads it back, so a fake that only
+    understands one call fails on the other. The sample must actually appear
+    on disk or the probe gives up before the interesting part.
+    """
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        for i, a in enumerate(args):
+            if a.endswith("sample.mp4") and args[i - 1] != "-i":
+                open(a, "wb").write(b"fake")
+        # The probe works in a temporary directory that is gone by the time
+        # the test reads it, so the command file is captured here, while it
+        # still exists.
+        if "-vf" in args:
+            graph = args[args.index("-vf") + 1]
+            path = graph.split("sendcmd=f='", 1)[1].split("'", 1)[0]
+            calls.append(("commands", open(path, encoding="utf-8").read()))
+        return subprocess.CompletedProcess(args, rc, b"", b"")
+
+    monkeypatch.setattr(ffmpeg_bin.subprocess, "run", fake_run)
+    ffmpeg_bin._sendcmd_is_sane.cache_clear()
+    return calls
+
+
+def _graph(calls):
+    for args in calls:
+        if isinstance(args, list) and "-vf" in args:
+            return args[args.index("-vf") + 1]
+    raise AssertionError("the probe never ran a filtergraph")
+
+
+def _commands(calls):
+    for entry in calls:
+        if isinstance(entry, tuple) and entry[0] == "commands":
+            return entry[1]
+    raise AssertionError("the probe wrote no command file")
+
+
+def _invocations(calls):
+    return [c for c in calls if isinstance(c, list)]
+
+
 def test_the_probe_runs_the_shape_we_actually_render(monkeypatch):
     """Not a synthetic smoke test: sendcmd driving a named crop, which is
     the only filtergraph the renderer ever builds."""
-    seen = {}
-
-    def fake_run(args, **kwargs):
-        seen["args"] = args
-        seen["timeout"] = kwargs.get("timeout")
-        return subprocess.CompletedProcess(args, 0, b"", b"")
-
-    monkeypatch.setattr(ffmpeg_bin.subprocess, "run", fake_run)
-    ffmpeg_bin._sendcmd_is_sane.cache_clear()
+    calls = _record(monkeypatch)
     assert ffmpeg_bin._sendcmd_is_sane("/fake/ffmpeg-a") is True
-
-    graph = seen["args"][seen["args"].index("-vf") + 1]
+    graph = _graph(calls)
     assert "sendcmd=" in graph
     assert "crop@c" in graph
-    assert seen["timeout"] == ffmpeg_bin._SENDCMD_PROBE_TIMEOUT
+
+
+def test_the_probe_decodes_a_real_stream(monkeypatch):
+    """Second thing an earlier version got wrong.
+
+    The identical graph over `lavfi` frames runs in 0.2 s on the build that
+    hangs on an encoded file. A probe that pipes generated frames straight
+    into the graph therefore reports the broken ffmpeg as healthy — measured,
+    not assumed. So the probe must encode a sample and read it back.
+    """
+    calls = _record(monkeypatch)
+    ffmpeg_bin._sendcmd_is_sane("/fake/ffmpeg-decode-check")
+    runs = _invocations(calls)
+    assert len(runs) == 2, "expected an encode followed by a decode"
+
+    encode, probe = runs
+    assert "lavfi" in encode, "the sample should be generated, not shipped"
+    assert "-vf" not in encode
+
+    src_index = probe.index("-i") + 1
+    assert probe[src_index].endswith(".mp4"), "the graph must read a file, not lavfi"
+    assert "lavfi" not in probe
 
 
 def test_the_probe_resizes_the_crop_not_just_moves_it(monkeypatch):
-    """The bug this file exists for, one level down.
+    """The first thing an earlier version got wrong.
 
-    The first probe only moved the window. Measured against the build it was
+    That probe only moved the window. Measured against the build it was
     written to reject: position-only commands finish in 2.3 s, resize
-    commands never finish. So that probe reported the broken ffmpeg as
-    healthy — a check that looks like protection and is not.
-
-    Changing the crop's dimensions is what forces the chain to reconfigure,
-    and it is what the punch-in zoom does on nearly every real clip.
+    commands never finish. Changing the crop's dimensions is what forces the
+    chain to reconfigure, and it is what the punch-in zoom does on nearly
+    every real clip.
     """
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        graph = args[args.index("-vf") + 1]
-        cmd_path = graph.split("sendcmd=f='", 1)[1].split("'", 1)[0]
-        captured["commands"] = open(cmd_path, encoding="utf-8").read()
-        return subprocess.CompletedProcess(args, 0, b"", b"")
-
-    monkeypatch.setattr(ffmpeg_bin.subprocess, "run", fake_run)
-    ffmpeg_bin._sendcmd_is_sane.cache_clear()
+    calls = _record(monkeypatch)
     ffmpeg_bin._sendcmd_is_sane("/fake/ffmpeg-resize-check")
 
-    commands = captured["commands"]
+    commands = _commands(calls)
+
     assert " crop@c w " in commands, "the probe never resizes, so it cannot detect the fault"
     assert " crop@c h " in commands
     widths = {
@@ -72,6 +120,15 @@ def test_the_probe_resizes_the_crop_not_just_moves_it(monkeypatch):
         if " crop@c w " in line
     }
     assert len(widths) > 1, "every command asks for the same width; nothing reconfigures"
+
+
+def test_a_build_that_cannot_even_make_the_sample_is_rejected(monkeypatch):
+    monkeypatch.setattr(
+        ffmpeg_bin.subprocess, "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 1, b"", b"nope"),
+    )
+    ffmpeg_bin._sendcmd_is_sane.cache_clear()
+    assert ffmpeg_bin._sendcmd_is_sane("/fake/ffmpeg-cannot-encode") is False
 
 
 def test_a_build_that_hangs_is_rejected(monkeypatch):

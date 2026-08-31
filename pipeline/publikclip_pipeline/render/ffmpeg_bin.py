@@ -175,43 +175,59 @@ def _sendcmd_is_sane(binary: str) -> bool:
     second clip that a current build renders in seventeen seconds. A
     capability probe cannot see that; only a clock can.
 
-    It matters WHICH parameter the commands change, and the first version of
-    this probe got it wrong — it moved the window and passed on the very
-    build it was written to reject. Measured against that build:
+    Reproducing it needs two things, both found by measurement after two
+    earlier versions of this probe passed the build they exist to reject:
 
-        position only (x)     2.3 s      resize (w/h)   never finishes
+    - The commands must change the crop's WIDTH AND HEIGHT, not its
+      position. Measured on the bad build: moving the window finishes in
+      2.3 s, resizing it never finishes. Resizing is what the punch-in zoom
+      does, so nearly every real clip carries these commands.
+    - The input must be a decoded video stream. The identical graph over
+      `lavfi` frames runs in 0.2 s on the same broken build; over an encoded
+      file it hangs. So the probe encodes one second of test pattern first
+      and reads that back — 32 KB, and it makes the difference between a
+      guard and a decoration.
 
-    Changing the crop's dimensions is what forces everything downstream to
-    reconfigure, and that is the path 6.1.1 falls off. It is also not an
-    exotic case here: the punch-in zoom resizes the window, so most clips
-    carry these commands.
-
-    Resolution turns out not to matter — the slow build hangs at 240x426
-    too — so the probe stays small and a healthy build answers in about a
-    second.
+    A healthy build answers in about a fifth of a second.
     """
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="publikclip-probe-") as tmp:
-        cmd_file = Path(tmp) / "probe.cmd"
+        root = Path(tmp)
+        sample = root / "sample.mp4"
+        try:
+            made = subprocess.run(
+                [
+                    binary, "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "testsrc=size=640x480:rate=25:duration=1",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(sample),
+                ],
+                capture_output=True, timeout=_SENDCMD_PROBE_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if made.returncode != 0 or not sample.exists():
+            return False
+
+        cmd_file = root / "probe.cmd"
         lines = []
         for i in range(25):
-            width = 320 - (i % 10) * 2
-            lines.append(f"{i / 25:.4f} crop@c w {width};")
-            lines.append(f"{i / 25:.4f} crop@c h {width * 2};")
+            side = 320 - (i % 10) * 2
+            lines.append(f"{i / 25:.4f} crop@c w {side};")
+            lines.append(f"{i / 25:.4f} crop@c h {side};")
         cmd_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
         graph = (
             f"sendcmd=f='{cmd_file.as_posix()}',"
-            "crop@c=w=320:h=240:x=100:y=0,"
+            "crop@c=w=320:h=320:x=100:y=0,"
             "scale=240:426:flags=lanczos,setsar=1"
         )
         try:
             proc = subprocess.run(
                 [
-                    binary, "-v", "error", "-f", "lavfi",
-                    "-i", "testsrc=size=640x480:rate=25:duration=1",
-                    "-vf", graph, "-c:v", "libx264", "-preset", "ultrafast",
-                    "-f", "null", "-",
+                    binary, "-v", "error", "-i", str(sample), "-vf", graph,
+                    "-c:v", "libx264", "-preset", "ultrafast", "-f", "null", "-",
                 ],
                 capture_output=True, timeout=_SENDCMD_PROBE_TIMEOUT,
             )
