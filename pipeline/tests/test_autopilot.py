@@ -555,7 +555,23 @@ def test_the_floor_sits_on_the_hundred_point_scale():
     """rubric.composite multiplies a 0-1 average by 100. The first version of
     this default read that as 0-10, so the floor never rejected anything and
     an unattended run would have published every clip it rendered."""
-    assert select.DEFAULT_MIN_SCORE == 50.0
+    assert select.DEFAULT_MIN_SCORE > select._SUSPICIOUS_SCALE
+
+
+def test_the_floor_lands_inside_the_range_the_rubric_actually_produces():
+    """A floor above everything the scorer emits is not strict, it is off.
+
+    Measured over 24 clips from two creators: 22.9 to 52.9, median 35.8. The
+    previous value of 50 kept 8% overall and nothing at all on a two-hour
+    interview — the autopilot ran the whole pipeline and published zero,
+    which costs the same as running and differs only in having nothing to
+    show.
+    """
+    observed_min, observed_median, observed_max = 22.9, 35.8, 52.9
+    assert observed_median < select.DEFAULT_MIN_SCORE < observed_max, (
+        "the floor must reject the typical clip and admit the best one"
+    )
+    assert select.DEFAULT_MIN_SCORE > observed_min
 
 
 def test_a_zero_to_ten_floor_is_refused_as_a_units_mistake(tmp_path):
@@ -572,13 +588,32 @@ def test_zero_still_disables_the_floor(tmp_path):
 
 
 def test_the_default_floor_keeps_the_good_clips_and_drops_the_bad(tmp_path):
-    """The scores a real job produced, and the judgement a human gave them."""
+    """The scores a real job produced, and the judgement a human gave them.
+
+    52.9 and 50.9 were called good; 22.9 was called bad. Everything between
+    is unjudged, so the floor is only required to agree at the two ends.
+    """
     job_dir = _job_dir(
         tmp_path,
         [_out(0, 52.9), _out(1, 50.9), _out(2, 49.7), _out(3, 26.5), _out(4, 22.9)],
     )
     kept = [c.clip for c in select.select("j1", job_dir, take=10)]
-    assert kept == [0, 1], "the floor should keep what the operator called good"
+    assert 0 in kept and 1 in kept, "the floor dropped what the operator called good"
+    assert 3 not in kept and 4 not in kept, "the floor kept what the operator called bad"
+
+
+def test_the_floor_leaves_a_real_job_something_to_publish(tmp_path):
+    """A two-hour Thinkerview interview, scored end to end on Groq.
+
+    Twelve clips, top score 43.9. Under the previous floor of 50 the
+    autopilot published nothing at all — the failure this value exists to
+    prevent is publishing rubbish, not publishing nothing.
+    """
+    scores = [43.9, 41.3, 37.8, 37.6, 36.0, 35.7, 35.2, 35.0, 34.4, 34.2, 33.7, 33.3]
+    job_dir = _job_dir(tmp_path, [_out(i, s) for i, s in enumerate(scores)])
+    kept = select.select("j1", job_dir, take=3)
+    assert kept, "the whole pipeline ran and selected nothing"
+    assert len(kept) <= 3
 
 
 def test_a_format_name_is_rejected_with_the_platform_it_maps_to():

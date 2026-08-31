@@ -20,20 +20,33 @@ from pathlib import Path
 # Composite score below which a clip is not worth an audience's attention.
 #
 # The scale is 0-100: rubric.composite averages the normalised subscores,
-# the interest curve and the visual pass, then multiplies by 100. So 50 is
-# not a round number picked to feel strict — it is literally half marks on
-# the weighted rubric, and the rubric itself says 8-out-of-10 on any single
-# dimension should be rare.
+# the interest curve and the visual pass, then multiplies by 100.
 #
-# The first version of this said 5.5, reading a 0-100 number as though it
-# were 0-10. Nothing failed: the floor simply never rejected anything, and
-# an unattended run would have published every clip it rendered, including
-# the ones a human called bad. A filter that silently passes everything is
-# worse than no filter, because it looks like one.
+# This value has been wrong twice, in opposite directions, and both times
+# the argument for it was arithmetic rather than measurement.
 #
-# Still a design value, to be fitted from real outcomes the way the
-# cross-validation constants are.
-DEFAULT_MIN_SCORE = 50.0
+# It began at 5.5, reading a 0-100 number as though it were 0-10. Nothing
+# failed: the floor simply never rejected anything, and an unattended run
+# would have published every clip it rendered.
+#
+# It then became 50 — "half marks on the weighted rubric", which is sound
+# reasoning about a scale nobody had looked at. Across 24 clips from two
+# creators the composite actually runs 22.9 to 52.9, median 35.8. A floor
+# at 50 keeps 8% of everything ever rendered here, and on a two-hour
+# Thinkerview interview it kept nothing at all: the autopilot ran the whole
+# pipeline and published zero clips, which is the same practical outcome as
+# not running.
+#
+# 40 is the third quartile of what has actually been measured. It rejects
+# three clips in four, and it makes the floor and `--clips 3` agree instead
+# of fight: twelve rendered, about three survive, three get published.
+#
+# Still a design value. The honest version of this number comes from the
+# Instagram feedback loop (decision #13), which fits the cross-validation
+# constants from real outcomes and can fit this one the same way. Until a
+# batch has actually been posted, treat it as a starting point and watch
+# what the first one publishes.
+DEFAULT_MIN_SCORE = 40.0
 
 # A caller passing something on the 0-10 scale means the units mistake
 # above, not a deliberately permissive run — 8 would be the third percentile

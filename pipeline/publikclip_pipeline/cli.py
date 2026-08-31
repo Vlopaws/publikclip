@@ -539,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     p_auto.add_argument("--limit", type=int, default=1, help="how many sources to process")
     p_auto.add_argument("--clips", type=int, default=3, help="clips kept per source")
     p_auto.add_argument(
-        "--min-score", type=float, default=50.0,
+        "--min-score", type=float, default=40.0,
         help="composite floor on the 0-100 scale; 0 disables it",
     )
     p_auto.add_argument(
