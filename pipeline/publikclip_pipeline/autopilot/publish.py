@@ -121,6 +121,30 @@ def already_posted(clip: SelectedClip, platform: str) -> bool:
 # --- backends -------------------------------------------------------------
 
 
+# Scoring and publishing name things differently and always will: a clip is
+# scored for "reels" and "shorts" — the formats — but posted to "instagram"
+# and "youtube" — the accounts. Someone reading a score report and then
+# writing --platforms is going to type the format, so say what to type
+# instead of only what was wrong.
+_FORMAT_TO_PLATFORM = {"reels": "instagram", "shorts": "youtube", "tiktoks": "tiktok"}
+
+
+def _reject_unknown(platforms: list[str]) -> None:
+    unknown = [p for p in platforms if p not in PLATFORMS]
+    if not unknown:
+        return
+    supported = f"Supported: {', '.join(PLATFORMS)}."
+    if all(p in _FORMAT_TO_PLATFORM for p in unknown):
+        swaps = ", ".join(f"{p} -> {_FORMAT_TO_PLATFORM[p]}" for p in unknown)
+        raise PublishError(
+            f"{', '.join(unknown)}: that is a format name, not a platform. "
+            f"Use {swaps}. {supported}"
+        )
+    raise PublishError(
+        f"Unsupported platform(s): {', '.join(unknown)}. {supported}"
+    )
+
+
 @dataclass
 class DryRunPublisher:
     """Posts nothing. The default, and the thing to run first."""
@@ -130,9 +154,7 @@ class DryRunPublisher:
     calls: list[tuple[SelectedClip, str]] = field(default_factory=list)
 
     def check_ready(self, platforms: list[str]) -> None:
-        unknown = [p for p in platforms if p not in PLATFORMS]
-        if unknown:
-            raise PublishError(f"Unsupported platform(s): {', '.join(unknown)}")
+        _reject_unknown(platforms)
 
     def publish(self, clip: SelectedClip, platform: str) -> PublishResult:
         self.calls.append((clip, platform))
@@ -189,9 +211,7 @@ class ComposioPublisher:
         A run that transcribes an hour of video and then discovers there is
         no connection has already paid for the expensive part.
         """
-        unknown = [p for p in platforms if p not in PLATFORMS]
-        if unknown:
-            raise PublishError(f"Unsupported platform(s): {', '.join(unknown)}")
+        _reject_unknown(platforms)
         if "instagram" in platforms and self.visibility != "public":
             # Instagram has no private publish: a Reel is public the moment
             # it exists. Posting it anyway under a private request would be

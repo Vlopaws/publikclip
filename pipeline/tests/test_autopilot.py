@@ -579,3 +579,27 @@ def test_the_default_floor_keeps_the_good_clips_and_drops_the_bad(tmp_path):
     )
     kept = [c.clip for c in select.select("j1", job_dir, take=10)]
     assert kept == [0, 1], "the floor should keep what the operator called good"
+
+
+def test_a_format_name_is_rejected_with_the_platform_it_maps_to():
+    """`--platforms reels` is the mistake the score report invites: clips
+    are scored for reels and shorts, but posted to instagram and youtube.
+    Naming only the error leaves the reader to guess the vocabulary."""
+    publisher = publish_mod.DryRunPublisher()
+    with pytest.raises(publish_mod.PublishError) as err:
+        publisher.check_ready(["tiktok", "reels"])
+    message = str(err.value)
+    assert "reels" in message
+    assert "instagram" in message, "the reader is not told what to type instead"
+    assert "Supported: " in message
+
+
+def test_a_plain_typo_still_lists_what_is_supported():
+    publisher = publish_mod.DryRunPublisher()
+    with pytest.raises(publish_mod.PublishError) as err:
+        publisher.check_ready(["facebok"])
+    assert "Supported: instagram, tiktok, youtube" in str(err.value)
+
+
+def test_valid_platforms_pass_the_check():
+    publish_mod.DryRunPublisher().check_ready(list(publish_mod.PLATFORMS))

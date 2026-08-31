@@ -119,6 +119,17 @@ def cmd_auto(args: argparse.Namespace) -> int:
     from . import autopilot
     from .sources import twitch, youtube
 
+    # Argument validation first. A mistyped platform name is free to catch
+    # here and costs a channel listing to catch after — and the listing is
+    # the cheap end of what follows it.
+    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    try:
+        publisher = autopilot.make_publisher(args.publish, visibility=args.visibility)
+        publisher.check_ready(platforms)
+    except autopilot.PublishError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
     if args.youtube:
         candidates = youtube.recent_uploads(
             args.youtube, limit=args.limit, progress=_stderr_progress
@@ -127,13 +138,6 @@ def cmd_auto(args: argparse.Namespace) -> int:
         candidates = twitch.channel_clips(
             args.twitch, limit=args.limit, progress=_stderr_progress
         )
-
-    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
-    try:
-        publisher = autopilot.make_publisher(args.publish, visibility=args.visibility)
-    except autopilot.PublishError as err:
-        print(str(err), file=sys.stderr)
-        return 1
 
     def note(kind: str, message: str) -> None:
         if args.jsonl:
