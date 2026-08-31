@@ -175,22 +175,31 @@ def _sendcmd_is_sane(binary: str) -> bool:
     second clip that a current build renders in seventeen seconds. A
     capability probe cannot see that; only a clock can.
 
-    So: one second of generated colour through the real shape of the graph.
-    Fast builds finish in a fraction of a second. The broken one never
-    returns, and the timeout is the answer.
+    It matters WHICH parameter the commands change, and the first version of
+    this probe got it wrong — it moved the window and passed on the very
+    build it was written to reject. Measured against that build:
+
+        position only (x)     2.3 s      resize (w/h)   never finishes
+
+    Changing the crop's dimensions is what forces everything downstream to
+    reconfigure, and that is the path 6.1.1 falls off. It is also not an
+    exotic case here: the punch-in zoom resizes the window, so most clips
+    carry these commands.
+
+    Resolution turns out not to matter — the slow build hangs at 240x426
+    too — so the probe stays small and a healthy build answers in about a
+    second.
     """
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="publikclip-probe-") as tmp:
         cmd_file = Path(tmp) / "probe.cmd"
-        # Move the window every other frame, which is what a real trajectory
-        # does and what the slow build chokes on.
-        cmd_file.write_text(
-            "\n".join(
-                f"{i / 25:.4f} crop@c x {100 + (i % 20)};" for i in range(25)
-            ) + "\n",
-            encoding="utf-8",
-        )
+        lines = []
+        for i in range(25):
+            width = 320 - (i % 10) * 2
+            lines.append(f"{i / 25:.4f} crop@c w {width};")
+            lines.append(f"{i / 25:.4f} crop@c h {width * 2};")
+        cmd_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         graph = (
             f"sendcmd=f='{cmd_file.as_posix()}',"
             "crop@c=w=320:h=240:x=100:y=0,"

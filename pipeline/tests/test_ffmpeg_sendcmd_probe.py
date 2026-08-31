@@ -40,6 +40,40 @@ def test_the_probe_runs_the_shape_we_actually_render(monkeypatch):
     assert seen["timeout"] == ffmpeg_bin._SENDCMD_PROBE_TIMEOUT
 
 
+def test_the_probe_resizes_the_crop_not_just_moves_it(monkeypatch):
+    """The bug this file exists for, one level down.
+
+    The first probe only moved the window. Measured against the build it was
+    written to reject: position-only commands finish in 2.3 s, resize
+    commands never finish. So that probe reported the broken ffmpeg as
+    healthy — a check that looks like protection and is not.
+
+    Changing the crop's dimensions is what forces the chain to reconfigure,
+    and it is what the punch-in zoom does on nearly every real clip.
+    """
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        graph = args[args.index("-vf") + 1]
+        cmd_path = graph.split("sendcmd=f='", 1)[1].split("'", 1)[0]
+        captured["commands"] = open(cmd_path, encoding="utf-8").read()
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(ffmpeg_bin.subprocess, "run", fake_run)
+    ffmpeg_bin._sendcmd_is_sane.cache_clear()
+    ffmpeg_bin._sendcmd_is_sane("/fake/ffmpeg-resize-check")
+
+    commands = captured["commands"]
+    assert " crop@c w " in commands, "the probe never resizes, so it cannot detect the fault"
+    assert " crop@c h " in commands
+    widths = {
+        line.split(" w ")[1].rstrip(";")
+        for line in commands.splitlines()
+        if " crop@c w " in line
+    }
+    assert len(widths) > 1, "every command asks for the same width; nothing reconfigures"
+
+
 def test_a_build_that_hangs_is_rejected(monkeypatch):
     def fake_run(args, **kwargs):
         raise subprocess.TimeoutExpired(args, kwargs.get("timeout", 1))
