@@ -45,6 +45,20 @@ _STATIC_WINDOWS = f"{_WINDOWS_RELEASE_BASE}/{_WINDOWS_ZIP}"
 # _ensure_capable_macos for what is done instead and what stays uncovered.
 _WINDOWS_SUMS = f"{_WINDOWS_RELEASE_BASE}/checksums.sha256"
 
+# The same publisher's Linux build, verified against the same manifest.
+# Linux was the one platform with no managed option, which meant the
+# deployment target — a cloud VM — ran whatever its distro shipped. Ubuntu
+# 24.04 ships 6.1.1, and that build takes over 30 minutes on a filtergraph
+# the current build finishes in 17 seconds. See _sendcmd_is_sane.
+_LINUX_TARBALL = "ffmpeg-master-latest-linux64-gpl.tar.xz"
+_STATIC_LINUX = f"{_WINDOWS_RELEASE_BASE}/{_LINUX_TARBALL}"
+
+# How long a one-second sendcmd encode may take before the build is
+# considered unusable. A healthy ffmpeg does it in well under a second; the
+# pathological one does not finish at all. The gap is large enough that no
+# reasonable machine speed sits between the two.
+_SENDCMD_PROBE_TIMEOUT = 20.0
+
 # Mach-O magics: 64-bit little-endian and the universal/fat wrappers.
 _MACHO_MAGICS = (bytes.fromhex("cffaedfe"), bytes.fromhex("cafebabe"), bytes.fromhex("bebafeca"))
 
@@ -150,6 +164,85 @@ def _looks_like_macho(path: Path) -> bool:
         return False
 
 
+@lru_cache(maxsize=8)
+def _sendcmd_is_sane(binary: str) -> bool:
+    """Can this build run a sendcmd-driven crop at a sane speed?
+
+    Every render is one `sendcmd` file driving one `crop@c`, so this is not
+    an exotic corner — it is the only filtergraph this project produces.
+    Ubuntu 24.04's ffmpeg 6.1.1 supports the filters, reports them in
+    `-filters`, and then takes more than thirty minutes on a twenty-six
+    second clip that a current build renders in seventeen seconds. A
+    capability probe cannot see that; only a clock can.
+
+    So: one second of generated colour through the real shape of the graph.
+    Fast builds finish in a fraction of a second. The broken one never
+    returns, and the timeout is the answer.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="publikclip-probe-") as tmp:
+        cmd_file = Path(tmp) / "probe.cmd"
+        # Move the window every other frame, which is what a real trajectory
+        # does and what the slow build chokes on.
+        cmd_file.write_text(
+            "\n".join(
+                f"{i / 25:.4f} crop@c x {100 + (i % 20)};" for i in range(25)
+            ) + "\n",
+            encoding="utf-8",
+        )
+        graph = (
+            f"sendcmd=f='{cmd_file.as_posix()}',"
+            "crop@c=w=320:h=240:x=100:y=0,"
+            "scale=240:426:flags=lanczos,setsar=1"
+        )
+        try:
+            proc = subprocess.run(
+                [
+                    binary, "-v", "error", "-f", "lavfi",
+                    "-i", "testsrc=size=640x480:rate=25:duration=1",
+                    "-vf", graph, "-c:v", "libx264", "-preset", "ultrafast",
+                    "-f", "null", "-",
+                ],
+                capture_output=True, timeout=_SENDCMD_PROBE_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return proc.returncode == 0
+
+
+def _ensure_capable_linux(progress) -> bool:
+    """BtbN's Linux build, through the same verified path as Windows."""
+    import tarfile
+
+    wanted = {"ffmpeg": config.bin_dir() / "ffmpeg", "ffprobe": config.bin_dir() / "ffprobe"}
+    if all(d.exists() for d in wanted.values()) and _has_subtitles_filter(str(wanted["ffmpeg"])):
+        return True
+    if progress:
+        progress(-1, "Downloading ffmpeg (one-time, caption support)…")
+    archive = config.bin_dir() / _LINUX_TARBALL
+    expected = _published_digest(_WINDOWS_SUMS, _LINUX_TARBALL)
+    if not expected:
+        return False  # no manifest, no trust — degrade instead of guessing
+    try:
+        if not _download(_STATIC_LINUX, archive, sha256=expected):
+            return False
+        with tarfile.open(archive) as tf:
+            for member in tf.getmembers():
+                base = member.name.rsplit("/", 1)[-1]
+                if base in wanted and "/bin/" in member.name and member.isfile():
+                    extracted = tf.extractfile(member)
+                    if extracted is None:
+                        continue
+                    wanted[base].write_bytes(extracted.read())
+                    wanted[base].chmod(0o755)
+    except (OSError, tarfile.TarError):
+        return False
+    finally:
+        archive.unlink(missing_ok=True)
+    return all(d.exists() for d in wanted.values())
+
+
 def _ensure_capable_macos(progress) -> bool:
     """ffmpeg.martin-riedl.de publishes no checksum manifest, so there is no
     publisher digest to pin against — the honest state of this path is:
@@ -250,14 +343,20 @@ def ensure_capable(progress=None) -> bool:
     """If no libass ffmpeg exists anywhere, download a static build once
     into PUBLIKCLIP_HOME/bin (macOS arm64/x86_64, Windows x64), then
     re-resolve. Returns whether caption burning is available afterwards."""
-    if supports_captions():
-        return True
     system = platform.system()
+    # Supporting the filters is necessary and, on Linux, not sufficient: a
+    # distro build can pass every capability probe and still be unusable on
+    # the one filtergraph this project renders. Only there is the extra
+    # timing probe worth its second.
+    if supports_captions() and (system != "Linux" or _sendcmd_is_sane(ffmpeg())):
+        return True
     config.ensure_home()
     if system == "Darwin":
         ok = _ensure_capable_macos(progress)
     elif system == "Windows":
         ok = _ensure_capable_windows(progress)
+    elif system == "Linux":
+        ok = _ensure_capable_linux(progress)
     else:
         return False
     if not ok:
