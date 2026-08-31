@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
 
@@ -152,24 +152,42 @@ class Settings:
     # the compute; flip on for the two-detector agreement boost.
     laughter_specialist: bool = False
 
+    # Serialization walks the dataclass rather than listing fields by hand.
+    #
+    # The hand-written version needed a new setting added in three places,
+    # and silently ignored it if you missed one. That is not hypothetical:
+    # max_finalists was added to the dataclass and set by the autopilot, and
+    # never reached the job, because to_json did not know about it. The
+    # symptom was a run rendering twelve clips while the code that asked for
+    # six looked correct at every point you would think to check.
     def to_json(self) -> dict:
-        return {
-            "camera": self.camera.__dict__.copy(),
-            "lufs_target": self.lufs_target,
-            "true_peak_db": self.true_peak_db,
-            "llm_mode": self.llm_mode,
-            "caption_preset": self.caption_preset,
-            "laughter_specialist": self.laughter_specialist,
-        }
+        out: dict = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            out[f.name] = value.__dict__.copy() if is_dataclass(value) else value
+        return out
 
     @classmethod
     def from_json(cls, data: dict) -> "Settings":
-        cam = CameraSettings(**data.get("camera", {}))
-        return cls(
-            camera=cam,
-            lufs_target=data.get("lufs_target", -14.0),
-            true_peak_db=data.get("true_peak_db", -1.0),
-            llm_mode=data.get("llm_mode", "gemini"),
-            caption_preset=data.get("caption_preset", "classic"),
-            laughter_specialist=data.get("laughter_specialist", False),
-        )
+        """Rebuild from a snapshot, tolerating both directions of drift.
+
+        A job dir outlives the code that wrote it: settings.json may predate
+        a field (use the default) or postdate one this build knows nothing
+        about (ignore it). Neither is an error worth refusing to resume a
+        job over.
+        """
+        known = {f.name: f for f in fields(cls)}
+        kwargs = {}
+        for name, field_def in known.items():
+            if name not in data:
+                continue
+            value = data[name]
+            nested = field_def.type
+            if name == "camera" and isinstance(value, dict):
+                allowed = {f.name for f in fields(CameraSettings)}
+                kwargs[name] = CameraSettings(
+                    **{k: v for k, v in value.items() if k in allowed}
+                )
+            else:
+                kwargs[name] = value
+        return cls(**kwargs)
