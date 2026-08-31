@@ -12,6 +12,7 @@ import json
 import sys
 
 from . import config
+from .jobs import prune as prune_mod
 from .jobs import queue
 # Cheap import (httpx + config only) — safe at module level next to the
 # deferred stage imports below, and argparse needs the mode list at
@@ -106,7 +107,37 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     return 0
 
 
+def _human(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
+
+
 def cmd_jobs(args: argparse.Namespace) -> int:
+    if getattr(args, "jobs_cmd", None) == "prune":
+        report = prune_mod.plan(
+            min_age_days=args.older_than, job_id=args.job_id
+        )
+        if args.apply and report.jobs:
+            prune_mod.apply(report)
+        if args.json:
+            print(json.dumps(report.to_json(), indent=2, ensure_ascii=False))
+            return 0
+        for entry in report.jobs:
+            print(
+                f"{entry.job_id}  {_human(entry.bytes_freed):>9}  "
+                f"{entry.status:<8} {entry.age_days:.0f}d  {(entry.title or '')[:44]}"
+            )
+        verb = "freed" if report.applied else "would free"
+        print(f"\n{verb} {_human(report.bytes_freed)} from {len(report.jobs)} job(s)")
+        if not report.applied and report.jobs:
+            print("re-run with --apply to delete")
+        for note in report.skipped[:5]:
+            print(f"  skipped {note}")
+        return 0
+
     for job in queue.list_jobs():
         stages = queue.stage_statuses(job.id)
         done = sum(1 for s in stages.values() if s == "done")
@@ -471,6 +502,20 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.set_defaults(fn=cmd_resume)
 
     p_jobs = sub.add_parser("jobs", help="list jobs")
+    jobs_sub = p_jobs.add_subparsers(dest="jobs_cmd")
+    p_prune = jobs_sub.add_parser(
+        "prune", help="reclaim source video and analysis audio from old jobs"
+    )
+    p_prune.add_argument("job_id", nargs="?", help="one job, instead of a sweep")
+    p_prune.add_argument(
+        "--older-than", type=float, default=prune_mod.DEFAULT_MIN_AGE_DAYS,
+        metavar="DAYS", help="leave jobs younger than this alone",
+    )
+    p_prune.add_argument(
+        "--apply", action="store_true",
+        help="actually delete; without it, only report what would go",
+    )
+    p_prune.add_argument("--json", action="store_true")
     p_jobs.set_defaults(fn=cmd_jobs)
 
     p_edit = sub.add_parser("edit", help="per-clip editing (context / visuals / render)")
