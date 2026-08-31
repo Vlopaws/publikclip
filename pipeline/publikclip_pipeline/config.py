@@ -131,6 +131,13 @@ class Settings:
     resumed job never silently picks up changed defaults."""
 
     camera: CameraSettings = field(default_factory=CameraSettings)
+    # How many scored moments reach the camera and the renderer. Those two
+    # stages cost more than everything before them combined — 25 minutes
+    # each for twelve clips — and the autopilot then publishes three. Left
+    # at None the historical 12 applies, which is right for an operator who
+    # will look through the lot; the autopilot lowers it to what it can
+    # actually use.
+    max_finalists: int | None = None
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     # Defaults to the backend that cannot generate a bill. Every hosted

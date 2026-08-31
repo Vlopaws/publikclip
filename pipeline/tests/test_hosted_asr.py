@@ -131,14 +131,20 @@ def test_missing_key_names_where_to_get_one(monkeypatch, tmp_path):
 
 
 def test_a_small_file_is_uploaded_as_is(monkeypatch, tmp_path):
-    """Compression is for oversized audio only; re-encoding a small file
-    would cost time for nothing."""
+    """Compression is for oversized audio only. Re-encoding a small file
+    would cost time for nothing — and so would probing its duration, which
+    is why neither subprocess may be reached on this path."""
     monkeypatch.setenv("PUBLIKCLIP_HOME", str(tmp_path))
     monkeypatch.setenv(hosted.API_KEY_ENV, "gsk_test")
     audio = tmp_path / "audio16k.wav"
     audio.write_bytes(b"0" * 1024)
     called = []
-    monkeypatch.setattr(hosted, "_to_flac", lambda p, e: called.append(1) or p)
+    monkeypatch.setattr(
+        hosted, "_extract_flac", lambda src, dest, s, l: called.append("flac") or src
+    )
+    monkeypatch.setattr(
+        hosted, "_audio_duration", lambda p: called.append("probe") or 1.0
+    )
 
     class _Res:
         status_code = 200
@@ -149,7 +155,7 @@ def test_a_small_file_is_uploaded_as_is(monkeypatch, tmp_path):
 
     monkeypatch.setattr(hosted.httpx, "post", lambda *a, **k: _Res())
     out = hosted.transcribe(audio)
-    assert called == [], "a small file was needlessly re-encoded"
+    assert called == [], "a small file was needlessly re-encoded or probed"
     assert out["backend"] == "groq"
     assert out["word_count"] == 1
 
@@ -159,9 +165,11 @@ def test_an_oversized_file_is_compressed_first(monkeypatch, tmp_path):
     monkeypatch.setenv(hosted.API_KEY_ENV, "gsk_test")
     audio = tmp_path / "audio16k.wav"
     audio.write_bytes(b"0" * (hosted.UPLOAD_LIMIT_BYTES + 1))
-    flac = tmp_path / "audio16k.flac"
+    flac = tmp_path / "audio16k.upload.flac"
     flac.write_bytes(b"0" * 1024)
-    monkeypatch.setattr(hosted, "_to_flac", lambda p, e: flac)
+    # Compression and probing are the two subprocess calls on this path.
+    monkeypatch.setattr(hosted, "_audio_duration", lambda p: 1200.0)
+    monkeypatch.setattr(hosted, "_extract_flac", lambda src, dest, s, l: flac)
 
     class _Res:
         status_code = 200
@@ -179,7 +187,11 @@ def test_still_oversized_after_compression_says_what_to_do(monkeypatch, tmp_path
     monkeypatch.setenv(hosted.API_KEY_ENV, "gsk_test")
     audio = tmp_path / "audio16k.wav"
     audio.write_bytes(b"0" * (hosted.UPLOAD_LIMIT_BYTES + 1))
-    monkeypatch.setattr(hosted, "_to_flac", lambda p, e: audio)
+    # Compression that gains nothing: every part still overruns the limit,
+    # and the operator is told what to do about it rather than watching a
+    # 413 come back from the server.
+    monkeypatch.setattr(hosted, "_audio_duration", lambda p: 60.0)
+    monkeypatch.setattr(hosted, "_extract_flac", lambda src, dest, s, l: audio)
     with pytest.raises(hosted.HostedAsrError) as err:
         hosted.transcribe(audio)
     assert "PUBLIKCLIP_ASR_BACKEND=local" in str(err.value)

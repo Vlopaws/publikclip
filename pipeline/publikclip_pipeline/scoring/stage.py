@@ -20,6 +20,9 @@ from . import frames as frames_mod
 from . import llm as llm_mod
 from . import rubric
 
+# Default number of scored moments carried into camera + render. Not a
+# quality threshold — those two stages are the expensive ones, so this is
+# the dial that decides what the run costs.
 SELECT_COUNT = 12
 
 
@@ -164,7 +167,8 @@ class ScoreStage(Stage):
             return max(scores.values())
 
         scored.sort(key=_text_rank, reverse=True)
-        finalists = scored[:SELECT_COUNT]
+        take = getattr(ctx.settings, "max_finalists", None) or SELECT_COUNT
+        finalists = scored[:take]
 
         # T2 visual pass + music brief on finalists only.
         # Capability, not identity: any multimodal backend gets the T2
@@ -234,6 +238,7 @@ class ScoreStage(Stage):
             "confidence": client.confidence,
             "clips": finalists,
             "scored_count": len(scored),
+            "finalist_cap": take,
             "t2_ran": supports_vision,
             "scoring_config_version": scoring_config["version"],
             "scoring_constants": cv_constants,

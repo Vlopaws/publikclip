@@ -73,10 +73,29 @@ class RunReport:
         }
 
 
-def _process(item: SourceItem, llm_mode: str, captions: str | None, emit) -> str:
+# The selection floor rejects clips after they are rendered, so rendering
+# exactly `clips_per_video` would leave nothing to fall back on when one of
+# them scores badly. Twice the target, floored at six, keeps a real choice
+# without paying for twelve.
+FINALIST_HEADROOM = 2
+MIN_FINALISTS = 6
+
+
+def _finalist_cap(clips_per_video: int) -> int:
+    return max(MIN_FINALISTS, clips_per_video * FINALIST_HEADROOM)
+
+
+def _process(
+    item: SourceItem,
+    llm_mode: str,
+    captions: str | None,
+    emit,
+    max_finalists: int | None = None,
+) -> str:
     """Run the full pipeline for one candidate; returns its job id."""
     settings = config.Settings()
     settings.llm_mode = llm_mode
+    settings.max_finalists = max_finalists
     if captions:
         settings.caption_preset = captions
     source_type = "url" if item.url.startswith(("http://", "https://")) else "file"
@@ -124,7 +143,10 @@ def run(
             def emit(stage: str, fraction: float, message: str) -> None:
                 note("stage", f"  {stage}: {message}")
 
-            outcome.job_id = _process(item, llm_mode, captions, emit)
+            outcome.job_id = _process(
+                item, llm_mode, captions, emit,
+                max_finalists=_finalist_cap(clips_per_video),
+            )
         except Exception as err:  # noqa: BLE001 - one bad source must not end the batch
             outcome.error = str(err)
             report.outcomes.append(outcome)

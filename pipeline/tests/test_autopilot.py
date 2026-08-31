@@ -185,7 +185,7 @@ def _item(url="https://x.invalid/a", title="A video"):
 def test_a_broken_source_does_not_end_the_batch(monkeypatch, tmp_path):
     processed = []
 
-    def fake_process(item, llm_mode, captions, emit):
+    def fake_process(item, llm_mode, captions, emit, **kwargs):
         processed.append(item.url)
         if "bad" in item.url:
             raise RuntimeError("ingest exploded")
@@ -208,7 +208,7 @@ def test_a_broken_source_does_not_end_the_batch(monkeypatch, tmp_path):
 def test_nothing_is_processed_when_everything_is_already_seen(monkeypatch):
     monkeypatch.setattr(runner, "unseen", lambda items: [])
     called = []
-    monkeypatch.setattr(runner, "_process", lambda *a: called.append(1))
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: called.append(1))
     report = runner.run([_item()])
     assert report.discovered == 0 and called == []
 
@@ -228,7 +228,7 @@ def test_the_destination_is_checked_before_any_processing(monkeypatch, tmp_path)
             raise AssertionError("must not be reached")
 
     monkeypatch.setattr(runner, "unseen", lambda items: items)
-    monkeypatch.setattr(runner, "_process", lambda *a: order.append("process") or "j")
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: order.append("process") or "j")
 
     with pytest.raises(publish_mod.PublishError):
         runner.run([_item()], publisher=_Refusing())
@@ -256,7 +256,7 @@ def test_a_dead_destination_is_reported_even_with_nothing_to_post(monkeypatch):
 
 def test_selected_clips_are_published_to_every_platform(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "unseen", lambda items: items)
-    monkeypatch.setattr(runner, "_process", lambda *a: "j1")
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: "j1")
     monkeypatch.setattr(runner.queue, "get_job", lambda job_id: type("J", (), {"dir": tmp_path})())
     monkeypatch.setattr(runner, "select", lambda *a, **k: [_clip(clip=0), _clip(clip=1)])
 
@@ -274,7 +274,7 @@ def test_an_already_posted_clip_is_skipped(monkeypatch, tmp_path):
         publish_mod.PublishResult(clip=clip, platform="instagram", ok=True, post_id="1")
     )
     monkeypatch.setattr(runner, "unseen", lambda items: items)
-    monkeypatch.setattr(runner, "_process", lambda *a: "j1")
+    monkeypatch.setattr(runner, "_process", lambda *a, **k: "j1")
     monkeypatch.setattr(runner.queue, "get_job", lambda job_id: type("J", (), {"dir": tmp_path})())
     monkeypatch.setattr(runner, "select", lambda *a, **k: [clip])
 
