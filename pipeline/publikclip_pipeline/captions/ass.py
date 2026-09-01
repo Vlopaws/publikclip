@@ -40,12 +40,27 @@ EMPHASIS_RMS_QUANTILE = 0.85
 # drawn at all, which is the correct outcome for a clip framed so tightly
 # that any title would sit on someone's face.
 TITLE_MAX_LINES = 2
-TITLE_SIZE = 76
-TITLE_MIN_SIZE = 46
-# Anton and Archivo Black average a little under half their point size per
-# glyph. Deliberately pessimistic: a title that wraps early looks composed,
-# one that overruns the frame looks broken.
-TITLE_CHAR_WIDTH_RATIO = 0.52
+TITLE_SIZE = 96
+TITLE_MIN_SIZE = 58
+
+# The headline does not inherit the caption font. Captions are read while
+# the clip plays and want a neutral face; a title has about one second to
+# stop a thumb, and Inter at 76 does not. Anton is the condensed grotesque
+# that thumbnail typography settled on — it fits more characters per line at
+# a given height, which is exactly what a hard character budget needs — and
+# it is already vendored for the "beast" preset.
+TITLE_FONT = "Anton"
+TITLE_FONT_FILE = "Anton-Regular.ttf"
+TITLE_UPPERCASE = True
+# Heavier than the captions': the title sits over picture, not over the
+# darker lower third, so it needs to carry its own contrast.
+TITLE_OUTLINE = 7
+TITLE_SHADOW = 3
+# Anton is condensed: measured against its metrics it averages well under
+# half its point size per glyph, and uppercase is wider than mixed case.
+# Deliberately pessimistic either way — a title that wraps early looks
+# composed, one that overruns the frame looks broken.
+TITLE_CHAR_WIDTH_RATIO = 0.46
 TITLE_SIDE_MARGIN = 60
 TITLE_LINE_SPACING = 1.18
 # In wide mode the band is a real empty bar, so the title can hold for the
@@ -291,10 +306,17 @@ def fit_title(text: str, band_px: int) -> tuple[list[str], int] | None:
 
 
 def _title_style(preset: Preset, size: int) -> str:
-    """A dedicated style so the headline never inherits caption margins."""
+    """A dedicated style: its own face, weight and margins.
+
+    Deliberately independent of the caption preset. The two do different
+    jobs — captions are read while the clip plays, the title has one second
+    to stop a thumb — and tying them together meant a "classic" run got a
+    headline in Inter, which reads as a caption that wandered upward.
+    """
     return (
-        f"Style: Title,{preset.font},{size},&H00FFFFFF,&H00FFFFFF,"
-        f"&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,5,2,5,"
+        f"Style: Title,{TITLE_FONT},{size},&H00FFFFFF,&H00FFFFFF,"
+        f"&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,"
+        f"{TITLE_OUTLINE},{TITLE_SHADOW},8,"
         f"{TITLE_SIDE_MARGIN},{TITLE_SIDE_MARGIN},0,1\n"
     )
 
@@ -340,7 +362,9 @@ def build_ass(
             end = (clip_duration or TITLE_HOLD_SEC) if hold_whole_clip else TITLE_HOLD_SEC
             if clip_duration:
                 end = min(end, clip_duration)
-            body = "\\N".join(_esc(line) for line in text_lines)
+            body = "\\N".join(
+                _esc(line.upper() if TITLE_UPPERCASE else line) for line in text_lines
+            )
             lines.append(
                 f"Dialogue: 2,{_fmt_time(0.0)},{_fmt_time(end)},Title,,0,0,0,"
                 f"{{\\an8\\pos({PLAY_RES_X // 2},{top})}}{body}\n"

@@ -70,6 +70,28 @@ def test_the_operator_can_override_the_measurement():
     assert forced.face_height == pytest.approx(0.2, abs=0.06)
 
 
+def test_a_webcam_over_gameplay_goes_wide():
+    """The case that shipped a bad clip.
+
+    A streamer's webcam is a small fixed box in a corner. Measured on a real
+    Twitch clip it is 12% of frame height — the old threshold was 10%, so
+    the camera framed the box and the game, which is the entire content,
+    was cropped away. The face was there; it was not the subject.
+    """
+    shape = framing.decide(analysis(height=0.117))
+    assert shape.mode == "wide"
+
+
+def test_the_threshold_sits_in_the_gap_between_the_two_populations():
+    """Set from measurement, so state the measurement.
+
+    webcam inset over gameplay   0.12
+    people talking to a camera   0.20 - 0.44  (17 clips, two creators)
+    """
+    webcam, smallest_talking_head = 0.12, 0.20
+    assert webcam < framing.MIN_FACE_HEIGHT < smallest_talking_head
+
+
 def test_the_threshold_is_a_boundary_not_a_cliff():
     assert framing.decide(analysis(height=framing.MIN_FACE_HEIGHT)).mode == "vertical"
     assert framing.decide(analysis(height=framing.MIN_FACE_HEIGHT - 0.001)).mode == "wide"
@@ -142,6 +164,35 @@ def test_a_title_is_dropped_rather_than_drawn_over_a_face():
 
 def test_a_title_that_cannot_shrink_enough_is_dropped():
     assert ass_mod.fit_title("mot " * 60, band_px=160) is None
+
+
+def test_the_title_does_not_inherit_the_caption_font():
+    """Captions and titles do different jobs.
+
+    A caption is read while the clip plays; a title has about a second to
+    stop a thumb. Tying them together gave a "classic" run a headline in
+    Inter, which reads as a caption that wandered upward.
+    """
+    doc = ass_mod.build_ass(
+        [], [], preset_name="classic", title="Un titre", title_band=(40, 515)
+    )
+    style = next(l for l in doc.splitlines() if l.startswith("Style: Title"))
+    assert ass_mod.TITLE_FONT in style
+    assert "Inter" not in style
+
+
+def test_the_title_is_upper_case_and_heavily_outlined():
+    doc = ass_mod.build_ass([], [], title="un titre court", title_band=(40, 515))
+    line = next(l for l in doc.splitlines() if l.startswith("Dialogue: 2"))
+    assert "UN TITRE COURT" in line
+    style = next(l for l in doc.splitlines() if l.startswith("Style: Title"))
+    assert f",{ass_mod.TITLE_OUTLINE},{ass_mod.TITLE_SHADOW}," in style
+
+
+def test_the_title_font_is_one_that_ships_with_the_project():
+    """libass resolves by family name against fontsdir. A face that is not
+    in there renders as a substitute, silently."""
+    assert (ass_mod.FONTS_DIR / ass_mod.TITLE_FONT_FILE).exists()
 
 
 def test_the_title_style_lands_in_the_styles_block():

@@ -33,11 +33,24 @@ from dataclasses import dataclass
 # clip is treated as being about a person.
 MIN_FACE_COVERAGE = 0.5
 
-# ...and how tall that face must be, as a fraction of frame height. A face
-# below this is a figure in a room rather than a subject: at 1080p, 0.10 is
-# a 108 px head, which fills 10% of a 9:16 crop. Below that the crop is
-# mostly furniture.
-MIN_FACE_HEIGHT = 0.10
+# ...and how tall that face must be, as a fraction of frame height.
+#
+# Set from the two populations this has actually seen, which separate
+# cleanly:
+#
+#   webcam inset over gameplay     0.12
+#   people talking to a camera     0.20 - 0.44   (17 clips, two creators)
+#
+# The first value is the one that matters. A streamer's webcam is a small
+# fixed box in a corner, and treating it as the subject crops to the box
+# and throws away the game — which is the entire content. The first
+# threshold here was 0.10, just under that box, so a Twitch clip came out
+# framed on a face while the action happened off-screen.
+#
+# 0.16 sits in the gap, nearer the gaming end because that is the error
+# worth avoiding: a wide cut of a talking head is merely less tight, while
+# a tight cut of a gameplay clip shows none of what happened.
+MIN_FACE_HEIGHT = 0.16
 
 # Output canvas. Matches renderer.OUT_W/OUT_H and the ASS PlayRes; kept
 # here so the band arithmetic is readable in one place.
