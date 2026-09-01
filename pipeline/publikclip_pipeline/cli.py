@@ -165,6 +165,30 @@ def cmd_auto(args: argparse.Namespace) -> int:
         candidates = youtube.recent_uploads(
             args.youtube, limit=args.limit, progress=_stderr_progress
         )
+    elif args.twitch_roster:
+        from .sources import roster as roster_mod
+
+        names = roster_mod.load(args.twitch_roster)
+        if not names:
+            print(f"No channels in {args.twitch_roster}", file=sys.stderr)
+            return 1
+        note_ = _stderr_progress
+        sweep = roster_mod.sweep(
+            names, per_channel=args.per_channel, progress=note_
+        )
+        if sweep.failed:
+            print(
+                f"{len(sweep.failed)} channel(s) could not be listed: "
+                f"{', '.join(sorted(sweep.failed)[:8])}",
+                file=sys.stderr,
+            )
+        # The pool is already ranked by view count; --limit takes the head.
+        candidates = sweep.items[: args.limit]
+        print(
+            f"{len(sweep.items)} clip(s) across {len(sweep.reached)} channel(s); "
+            f"taking the top {len(candidates)}",
+            file=sys.stderr,
+        )
     else:
         candidates = twitch.channel_clips(
             args.twitch, limit=args.limit, progress=_stderr_progress
@@ -220,6 +244,25 @@ def cmd_sources(args: argparse.Namespace) -> int:
     for bound in ("min_duration", "max_duration"):
         if hasattr(args, bound):
             setattr(args, bound, _bound(getattr(args, bound)))
+
+    if args.source_cmd == "roster":
+        from .sources import roster as roster_mod
+
+        names = roster_mod.load(args.file)
+        emit = None if args.json else _stderr_progress
+        sweep = roster_mod.sweep(names, per_channel=args.per_channel, progress=emit)
+        if args.json:
+            print(json.dumps(sweep.to_json(), indent=2, ensure_ascii=False))
+            return 0
+        print(
+            f"{len(sweep.items)} clip(s) from {len(sweep.reached)}/{sweep.channels} "
+            "channel(s), ranked by views"
+        )
+        for item in sweep.items[: args.top]:
+            print(f"  {item.url}\t{(item.channel or '?')[:18]:<18} {item.summary()}")
+        for name, why in sorted(sweep.failed.items())[:8]:
+            print(f"  unreachable {name}: {why[:70]}")
+        return 0
 
     if args.source_cmd == "probe":
         from .sources import clippability
@@ -536,6 +579,14 @@ def main(argv: list[str] | None = None) -> int:
     auto_src = p_auto.add_mutually_exclusive_group(required=True)
     auto_src.add_argument("--youtube", metavar="CHANNEL", help="@handle, channel id, or URL")
     auto_src.add_argument("--twitch", metavar="CHANNEL", help="Twitch channel name")
+    auto_src.add_argument(
+        "--twitch-roster", metavar="FILE",
+        help="file of Twitch channels; their clips are pooled and ranked together",
+    )
+    p_auto.add_argument(
+        "--per-channel", type=int, default=5,
+        help="clips to consider from each rostered channel before ranking",
+    )
     p_auto.add_argument("--limit", type=int, default=1, help="how many sources to process")
     p_auto.add_argument("--clips", type=int, default=3, help="clips kept per source")
     p_auto.add_argument(
@@ -590,6 +641,13 @@ def main(argv: list[str] | None = None) -> int:
         help="how many recent uploads to sample (a minute of each)",
     )
 
+    p_roster = src_sub.add_parser(
+        "roster", help="pool the clips of many Twitch channels and rank them"
+    )
+    p_roster.add_argument("file", help="one channel per line; # comments allowed")
+    p_roster.add_argument("--per-channel", type=int, default=5)
+    p_roster.add_argument("--top", type=int, default=20, help="how many to print")
+
     p_scan = src_sub.add_parser(
         "scan", help="how crowded the clip scene around a creator looks (heuristic)"
     )
@@ -601,7 +659,7 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the reach measurement (faster, but 'open' stops being meaningful)",
     )
 
-    for parser_ in (p_yt, p_tw, p_scan, p_probe):
+    for parser_ in (p_yt, p_tw, p_scan, p_probe, p_roster):
         parser_.add_argument("--new-only", action="store_true", help="drop what the job queue already has")
         parser_.add_argument("--json", action="store_true")
     p_sources.set_defaults(fn=cmd_sources)

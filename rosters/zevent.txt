@@ -1,0 +1,33 @@
+# ZEvent roster — one Twitch channel per line.
+#
+# Fill this from https://zevent.fr/streamers before the event. It is typed
+# out rather than fetched on purpose: no public endpoint publishes the
+# participant list (four were tried, all 404), and a roster that breaks
+# mid-event because a webpage changed is worse than one that is simply
+# written down. It is also the honest place for the judgement calls —
+# whose clips are worth the compute is not a fact to be looked up.
+#
+# Accepted on each line, all equivalent:
+#     zerator
+#     @zerator
+#     https://www.twitch.tv/zerator/
+#
+# Blank lines and everything after a `#` are ignored. Duplicates are dropped
+# however they were written. Order is preserved but does not decide anything
+# — the whole roster is pooled and ranked by view count together, so the
+# event's biggest moment wins over a quiet channel's best one.
+#
+# Usage:
+#     publikclip sources roster rosters/zevent.txt --top 20
+#     publikclip auto --twitch-roster rosters/zevent.txt --limit 3 --llm groq
+#
+# The listing is parallel, so a roster of fifty costs seconds, not minutes.
+# Clips already processed are skipped on later runs, so this can be re-run
+# through the event to pick up what is new.
+
+# --- verified working, kept as a starting point -------------------------
+zerator
+domingo
+mistermv
+
+# --- add the rest of the roster below -----------------------------------
