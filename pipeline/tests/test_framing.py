@@ -152,9 +152,25 @@ def test_the_title_style_lands_in_the_styles_block():
     assert "Dialogue: 2" in doc
 
 
-def test_the_title_is_positioned_at_the_band_centre():
+def test_the_title_hangs_from_the_top_of_the_band():
+    """Anchored to the band's top edge, not centred inside it.
+
+    Centring reads fine when the band is a letterbox bar and badly when it
+    is not: a streamer whose webcam sits low in frame leaves a band most of
+    the picture tall, and the title lands in the middle of the shot. Seen on
+    the first real VM render. The band says how far down the title may
+    start; it does not say where to put it.
+    """
     doc = ass_mod.build_ass([], [], title="Court", title_band=(100, 500))
-    assert "\\pos(540,300)" in doc
+    assert "\\an8" in doc, "the block must grow downward from its anchor"
+    assert "\\pos(540,100)" in doc
+    assert "\\pos(540,300)" not in doc, "still centring in the band"
+
+
+def test_a_tall_band_does_not_push_the_title_into_the_picture():
+    """The regression itself: a face low in frame leaves a huge band."""
+    doc = ass_mod.build_ass([], [], title="Court", title_band=(40, 1016))
+    assert "\\pos(540,40)" in doc
 
 
 def test_a_wide_title_holds_for_the_whole_clip():

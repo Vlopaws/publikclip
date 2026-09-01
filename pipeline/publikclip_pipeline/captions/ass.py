@@ -330,14 +330,20 @@ def build_ass(
             lines[0] = header.replace(
                 "\n[Events]", "\n" + _title_style(preset, size) + "\n[Events]"
             )
-            centre_y = (top + bottom) // 2
+            # Hang the block from the top of the free band rather than
+            # centring inside it. Centring reads fine when the band is a
+            # letterbox bar, and badly when it is not: a streamer whose
+            # webcam sits low in frame leaves a band most of the picture
+            # tall, and the title lands in the middle of the shot. Titles
+            # belong at the top, and the band's job is only to say how far
+            # down the top may be.
             end = (clip_duration or TITLE_HOLD_SEC) if hold_whole_clip else TITLE_HOLD_SEC
             if clip_duration:
                 end = min(end, clip_duration)
             body = "\\N".join(_esc(line) for line in text_lines)
             lines.append(
                 f"Dialogue: 2,{_fmt_time(0.0)},{_fmt_time(end)},Title,,0,0,0,"
-                f"{{\\an5\\pos({PLAY_RES_X // 2},{centre_y})}}{body}\n"
+                f"{{\\an8\\pos({PLAY_RES_X // 2},{top})}}{body}\n"
             )
 
     for chunk in chunk_words(words):
