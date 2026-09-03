@@ -26,6 +26,31 @@ LIMIT=${LIMIT:-5}
 PLATFORMS=${PLATFORMS:-tiktok,instagram}
 PUBLISH=${PUBLISH:-dry-run}
 VISIBILITY=${VISIBILITY:-private}
+
+# The composite floor, lower here than the pipeline default of 40, and this
+# needs saying plainly because lowering a threshold to make things pass is
+# usually the wrong move.
+#
+# Measured, two populations that the rubric scores completely differently:
+#
+#     long-form talk (Underscore_, Thinkerview)   23 - 53
+#     Twitch clips                                23 - 33   (4 clips)
+#
+# The rubric reads a transcript. A gaming clip's payload is visual — the
+# kill, the reaction — and its transcript is "on s'arrpond". It is not that
+# these clips are bad; it is that the instrument cannot see what makes them
+# good, and one absolute floor across two populations it measures unequally
+# rejects the whole of the second.
+#
+# What does the selecting on this path is upstream and stronger: the roster
+# ranks every channel's clips by view count and --limit takes the head.
+# Those views are a crowd choosing a highlight before the pipeline ever
+# looks. The floor here is the weaker, second filter — so it drops to the
+# bottom of the Twitch population rather than the middle of the other one.
+#
+# Fitted to four clips. Revisit it from real outcomes once anything has
+# actually been posted.
+MIN_SCORE=${MIN_SCORE:-30}
 # Keep at least this much of the burst budget in reserve for shutting down.
 POWEROFF=${POWEROFF:-1}
 
@@ -52,7 +77,7 @@ if [ -e "$PAUSE" ]; then
   exit 0
 fi
 
-say "=== burst starting: roster=$ROSTER limit=$LIMIT publish=$PUBLISH ==="
+say "=== burst starting: roster=$ROSTER limit=$LIMIT publish=$PUBLISH min_score=$MIN_SCORE ==="
 
 run() {
   sudo -u publikclip HOME=$APP PYTHONUNBUFFERED=1 \
@@ -74,6 +99,7 @@ run auto \
   --twitch-roster "$ROSTER" \
   --limit "$LIMIT" \
   --llm groq \
+  --min-score "$MIN_SCORE" \
   --platforms "$PLATFORMS" \
   --publish "$PUBLISH" \
   --visibility "$VISIBILITY" \
@@ -85,4 +111,4 @@ run auto \
 say "--- prune ---"
 run jobs prune --older-than 1 --apply 2>&1 | tail -5 | tee -a "$LOG"
 
-say "disk: $(df -h / | awk 'NR==2 {print $4\" free of \"$2}')"
+say "disk: $(df -h / | awk 'NR==2 {printf "%s free of %s", $4, $2}')"
