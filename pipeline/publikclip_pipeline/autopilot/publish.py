@@ -380,10 +380,18 @@ def make_publisher(mode: str, visibility: str = "private", **kwargs):
         return DryRunPublisher(visibility=visibility)
     if mode == "composio":
         return ComposioPublisher(visibility=visibility, **kwargs)
+    if mode == "zernio":
+        # Imported here for the same reason as postiz below: zernio imports
+        # from this module, and a top-level import either way is circular.
+        from .zernio import ZernioPublisher
+
+        return ZernioPublisher(visibility=visibility, **kwargs)
     if mode == "postiz":
         # Imported here: postiz imports from this module, and a top-level
         # import either way would be circular.
         from .postiz import PostizPublisher
 
         return PostizPublisher(visibility=visibility, **kwargs)
-    raise PublishError(f"Unknown publish mode {mode!r} (dry-run | composio | postiz)")
+    raise PublishError(
+        f"Unknown publish mode {mode!r} (dry-run | zernio | composio | postiz)"
+    )

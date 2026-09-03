@@ -594,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
         help="composite floor on the 0-100 scale; 0 disables it",
     )
     p_auto.add_argument(
-        "--publish", default="dry-run", choices=["dry-run", "composio", "postiz"],
+        "--publish", default="dry-run", choices=["dry-run", "zernio", "composio", "postiz"],
         help="dry-run posts nothing and reports what would go out (default)",
     )
     p_auto.add_argument(

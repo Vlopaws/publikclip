@@ -67,15 +67,27 @@ class SelectedClip:
     duration: float
     summary: str
     confidence: str
+    # Written by the render stage from this clip's own transcript: the
+    # headline burned onto the video, a caption for the post, and tags.
+    # They were being generated and then dropped here, so a published post
+    # fell back to the scorer's one-line summary — which describes the clip
+    # for an operator reading a report, not for someone scrolling.
+    title: str = ""
+    description: str = ""
+    hashtags: tuple[str, ...] = ()
 
     def caption(self, limit: int = 180) -> str:
-        """The clip's own one-line summary, which the scorer already wrote.
+        """What the post should say, best available first.
 
-        No hashtag padding and no invented hype: whatever ships here was
-        generated from the transcript, so it should stay recognisable as a
+        The render stage's description is written to be read by an audience;
+        the scorer's summary is written to be read by whoever is deciding
+        whether to publish. Prefer the first and fall back to the second.
+
+        No hashtag padding and no invented hype either way: everything here
+        was generated from the transcript, so it stays recognisable as a
         description of what actually happens.
         """
-        text = " ".join(self.summary.split())
+        text = " ".join((self.description or self.summary).split())
         if len(text) <= limit:
             return text
         return text[: limit - 1].rsplit(" ", 1)[0] + "…"
@@ -90,6 +102,9 @@ class SelectedClip:
             "duration": self.duration,
             "summary": self.summary,
             "confidence": self.confidence,
+            "title": self.title,
+            "description": self.description,
+            "hashtags": list(self.hashtags),
         }
 
 
@@ -153,6 +168,9 @@ def select(
                 duration=float(duration),
                 summary=meta.get("summary") or "",
                 confidence=confidence,
+                title=output.get("title") or "",
+                description=output.get("description") or "",
+                hashtags=tuple(output.get("hashtags") or ()),
             )
         )
 
