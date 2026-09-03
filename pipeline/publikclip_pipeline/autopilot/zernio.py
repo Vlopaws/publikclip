@@ -46,12 +46,19 @@ API_KEY_ENV = "PUBLIKCLIP_ZERNIO_API_KEY"
 UPLOAD_TIMEOUT = 900.0
 API_TIMEOUT = 60.0
 
-# The presign response names the two URLs, and the docs quote only one of
-# them ("publicUrl"). Rather than guess the other and fail with a KeyError
-# months from now, accept what the field is plausibly called and say exactly
-# what came back when none of them is there.
+# Confirmed against Zernio's own OpenAPI (zernio.com/openapi.json), which
+# the API's 404 responses point at: POST /v1/media/presign answers
+# {uploadUrl, publicUrl, key, expiresIn}. The alternatives stay as a hedge
+# against a rename, and an unrecognised response prints what it actually
+# contained rather than raising a KeyError that names nothing.
 _UPLOAD_URL_KEYS = ("uploadUrl", "upload_url", "url", "signedUrl", "presignedUrl")
 _PUBLIC_URL_KEYS = ("publicUrl", "public_url", "mediaUrl", "fileUrl")
+
+# GET /v1/accounts returns Mongo documents, so the identifier is `_id`.
+# Reading only `accountId`/`id` returned no accounts at all against three
+# genuinely connected ones — the key was fine and the parse was wrong,
+# which looks identical from the outside.
+_ACCOUNT_ID_KEYS = ("_id", "accountId", "account_id", "id")
 
 
 def api_key() -> str | None:
@@ -165,7 +172,9 @@ class ZernioPublisher:
             if not isinstance(row, dict):
                 continue
             platform = (row.get("platform") or row.get("provider") or "").lower()
-            account = row.get("accountId") or row.get("id") or row.get("account_id")
+            account = next(
+                (str(row[k]) for k in _ACCOUNT_ID_KEYS if row.get(k)), None
+            )
             if platform and account:
                 found.setdefault(platform, str(account))
         self._accounts = found
@@ -199,9 +208,15 @@ class ZernioPublisher:
             raise PublishError(f"Clip file is missing: {path}")
         content_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
 
+        # `size` is optional but pre-validated server-side: a file over the
+        # limit is refused before the bytes are sent rather than after.
         presigned = self._post(
             "/media/presign",
-            {"filename": path.name, "contentType": content_type},
+            {
+                "filename": path.name,
+                "contentType": content_type,
+                "size": path.stat().st_size,
+            },
         )
         upload_url = _first(presigned, _UPLOAD_URL_KEYS)
         public_url = _first(presigned, _PUBLIC_URL_KEYS)
@@ -249,12 +264,31 @@ class ZernioPublisher:
             if not account:
                 raise PublishError(f"{platform} is not connected in Zernio")
 
-            media_url = self.upload(Path(clip.path))
+            path = Path(clip.path)
+            media_url = self.upload(path)
             body: dict = {
                 "content": self._caption(clip),
-                "mediaItems": [{"url": media_url, "type": "video"}],
+                "mediaItems": [
+                    {
+                        "type": "video",
+                        "url": media_url,
+                        "filename": path.name,
+                        "size": path.stat().st_size,
+                        "mimeType": "video/mp4",
+                    }
+                ],
                 "platforms": [{"platform": platform, "accountId": account}],
             }
+            if clip.title:
+                # Reference only — Zernio's own docs say this is not used as
+                # the caption. The burned-in headline is the one people see.
+                body["title"] = clip.title
+            if clip.hashtags:
+                # Also reference only: the spec states hashtags are NOT
+                # appended to the content, which is why _caption puts them
+                # in the text itself. Sent here too so they survive in
+                # Zernio's record of the post.
+                body["hashtags"] = [t.lstrip("#") for t in clip.hashtags]
             if self.schedule_in_minutes:
                 import datetime as _dt
 
@@ -267,7 +301,9 @@ class ZernioPublisher:
                 body["publishNow"] = True
 
             created = self._post("/posts", body)
-            post_id = _first(created, ("id", "postId", "post_id"))
+            # 201 answers {message, post, warnings}; the identifier is one
+            # level down, and it is a Mongo `_id` like the accounts.
+            post_id = _first(created, ("_id", "id", "postId", "post_id"))
             return PublishResult(
                 clip=clip,
                 platform=platform,

@@ -166,8 +166,61 @@ def test_the_clip_is_uploaded_then_referenced_by_its_public_url(monkeypatch, tmp
 
     assert result.ok, result.error
     assert fake.uploaded == ["https://upload.example/put"]
-    media = fake.posts[0]["mediaItems"]
-    assert media == [{"url": "https://cdn.example/clip.mp4", "type": "video"}]
+
+    media = fake.posts[0]["mediaItems"][0]
+    # The two URLs are different things and conflating them would only fail
+    # against the live API: bytes go to the presigned one, the post carries
+    # the public one.
+    assert media["url"] == "https://cdn.example/clip.mp4"
+    assert media["url"] not in fake.uploaded
+    assert media["type"] == "video"
+    assert media["filename"] == "clip_00.mp4"
+    assert media["size"] == 2048
+
+
+def test_the_presign_declares_the_size_for_pre_validation(monkeypatch, tmp_path):
+    """Optional, and worth sending: an oversized file is refused before the
+    bytes go over the wire rather than after."""
+    fake = Fake().install(monkeypatch)
+    sent = {}
+    original = zernio.httpx.post
+
+    def spy(url, **kw):
+        if url.endswith("/media/presign"):
+            sent.update(kw.get("json") or {})
+        return original(url, **kw)
+
+    monkeypatch.setattr(zernio.httpx, "post", spy)
+    zernio.ZernioPublisher().publish(a_clip(tmp_path), "tiktok")
+    assert sent["size"] == 2048
+    assert sent["contentType"] == "video/mp4"
+
+
+def test_the_account_id_is_read_from_a_mongo_document(monkeypatch):
+    """What the live API actually returns.
+
+    GET /v1/accounts answers Mongo documents keyed on `_id`. Reading only
+    `accountId`/`id` found nothing against three genuinely connected
+    accounts — and an empty result looks exactly like "nothing connected",
+    which is the wrong thing to tell someone.
+    """
+    Fake(accounts=[{"_id": "6a99b54a77555aae01d285e5", "platform": "instagram"}]).install(
+        monkeypatch
+    )
+    assert zernio.ZernioPublisher().accounts() == {
+        "instagram": "6a99b54a77555aae01d285e5"
+    }
+
+
+def test_the_reference_only_fields_travel_too(monkeypatch, tmp_path):
+    """Zernio stores `title` and `hashtags` but does not put either into the
+    caption, which is why the caption carries the tags itself."""
+    fake = Fake().install(monkeypatch)
+    zernio.ZernioPublisher().publish(a_clip(tmp_path), "tiktok")
+    body = fake.posts[0]
+    assert body["title"] == "UN TITRE"
+    assert body["hashtags"] == ["zevent", "twitch"]
+    assert "#zevent" in body["content"], "tags must also be in the visible text"
 
 
 def test_a_presign_without_the_urls_says_what_came_back(monkeypatch, tmp_path):
