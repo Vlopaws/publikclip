@@ -398,3 +398,30 @@ def test_those_platforms_are_fine_when_public_is_asked_for_deliberately(monkeypa
 def test_tiktok_alone_can_still_run_privately(monkeypatch):
     Fake().install(monkeypatch)
     zernio.ZernioPublisher(visibility="private").check_ready(["tiktok"])
+
+
+def test_a_clip_is_uploaded_once_however_many_platforms(monkeypatch, tmp_path):
+    """Three clips across three networks is nine publish() calls and should
+    be three uploads, not nine. The bytes do not change between them."""
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(visibility="public")
+    clip = a_clip(tmp_path)
+    for platform in ("tiktok", "instagram", "youtube"):
+        assert pub.publish(clip, platform).ok
+    assert len(fake.uploaded) == 1, f"uploaded {len(fake.uploaded)} times"
+    assert len(fake.posts) == 3
+    assert {p["mediaItems"][0]["url"] for p in fake.posts} == {
+        "https://cdn.example/clip.mp4"
+    }
+
+
+def test_two_different_clips_are_both_uploaded(monkeypatch, tmp_path):
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(visibility="public")
+    first = a_clip(tmp_path)
+    second_path = tmp_path / "clip_01.mp4"
+    second_path.write_bytes(b"" * 1024)
+    second = a_clip(tmp_path, path=second_path)
+    pub.publish(first, "tiktok")
+    pub.publish(second, "tiktok")
+    assert len(fake.uploaded) == 2

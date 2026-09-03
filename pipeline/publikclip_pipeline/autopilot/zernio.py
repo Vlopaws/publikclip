@@ -122,6 +122,12 @@ class ZernioPublisher:
         self.visibility = visibility
         self.schedule_in_minutes = schedule_in_minutes
         self._accounts: dict[str, str] | None = None
+        # publish() is called once per clip per platform, and the file does
+        # not change between those calls. Three clips across three networks
+        # is nine uploads of three files — sixty megabytes of the same bytes
+        # sent twice for nothing. Keyed on the path, for the life of the
+        # publisher, which is one batch.
+        self._uploaded: dict[str, str] = {}
 
     # --- plumbing --------------------------------------------------------
 
@@ -254,9 +260,17 @@ class ZernioPublisher:
     # --- media -----------------------------------------------------------
 
     def upload(self, path: Path) -> str:
-        """Put the clip in Zernio's storage; return the URL a post can use."""
+        """Put the clip in Zernio's storage; return the URL a post can use.
+
+        Uploaded once per file per batch. Zernio keeps a presigned upload in
+        temporary storage for seven days and copies it to permanent storage
+        when a post using it publishes, so one URL serves every platform.
+        """
         if not path.exists():
             raise PublishError(f"Clip file is missing: {path}")
+        cached = self._uploaded.get(str(path))
+        if cached:
+            return cached
         content_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
 
         # `size` is optional but pre-validated server-side: a file over the
@@ -292,6 +306,7 @@ class ZernioPublisher:
                 f"Zernio storage refused {path.name} "
                 f"(HTTP {res.status_code}): {res.text[:200]}"
             )
+        self._uploaded[str(path)] = public_url
         return public_url
 
     # --- posting ---------------------------------------------------------
