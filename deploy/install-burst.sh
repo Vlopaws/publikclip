@@ -22,6 +22,26 @@ BACKSTOP_MIN=${BACKSTOP_MIN:-100}
 
 install -o root -g root -m 755 "$APP/src/deploy/burst.sh" /usr/local/bin/publikclip-burst
 
+# Settings live outside the unit so they can be changed without editing
+# systemd or the repo — and so a change survives the next reinstall.
+if [ ! -f "$APP/burst.env" ]; then
+  cat > "$APP/burst.env" <<'ENV'
+# publikclip burst settings. Edit, then: sudo systemctl daemon-reload
+#
+# PUBLISH     dry-run | zernio      (dry-run posts nothing at all)
+# VISIBILITY  private | unlisted | public
+# LIMIT       how many clips one burst processes; each costs ~5 min
+# MIN_SCORE   composite floor; see the note in burst.sh before raising it
+PUBLISH=zernio
+VISIBILITY=private
+LIMIT=5
+PLATFORMS=tiktok,instagram
+MIN_SCORE=30
+ROSTER=/opt/publikclip/src/rosters/zevent.txt
+ENV
+  chmod 644 "$APP/burst.env"
+fi
+
 cat > /etc/systemd/system/publikclip-burst.service <<UNIT
 [Unit]
 Description=publikclip: one burst, then power off
@@ -30,6 +50,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=-${APP}/burst.env
 ExecStart=/usr/local/bin/publikclip-burst
 # The deadline is a cost control, not a performance target. On expiry
 # systemd kills the process and burst.sh's EXIT trap still powers off.
@@ -62,6 +83,7 @@ systemctl daemon-reload
 systemctl enable publikclip-burst.service publikclip-backstop.service
 
 echo "installed."
+echo "  settings     : ${APP}/burst.env"
 echo "  burst budget : ${BUDGET_SEC}s"
 echo "  backstop     : shutdown +${BACKSTOP_MIN}min from boot"
 echo
