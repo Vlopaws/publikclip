@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import config
+from .autopilot import select as select_mod
 from .jobs import prune as prune_mod
 from .jobs import queue
 # Cheap import (httpx + config only) — safe at module level next to the
@@ -221,6 +223,75 @@ def cmd_auto(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(report.to_json(), indent=2))
     return 0 if report.failures == 0 else 1
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    """Publish the clips of a job that has already been rendered.
+
+    `run` produces clips and `auto` publishes them, and until now there was
+    no way between the two: a job cut by hand could not be posted at all
+    without re-running discovery over it. This is the same selection and the
+    same ledger the autopilot uses, pointed at one job.
+    """
+    from . import autopilot
+    from .autopilot import publish as publish_mod
+    from .autopilot.select import select
+
+    job = queue.get_job(args.job_id)
+    job_dir = Path(args.dir) if args.dir else (job.dir if job else None)
+    if job_dir is None or not job_dir.exists():
+        print(
+            f"No job {args.job_id} here. Pass --dir if its directory is "
+            "somewhere else.",
+            file=sys.stderr,
+        )
+        return 2
+
+    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    try:
+        publisher = autopilot.make_publisher(args.publish, visibility=args.visibility)
+        publisher.check_ready(platforms)
+    except autopilot.PublishError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
+    picked = select(
+        args.job_id, job_dir, take=args.clips, min_score=args.min_score
+    )
+    if not picked:
+        print(
+            f"Nothing in {args.job_id} scored at or above {args.min_score}.",
+            file=sys.stderr,
+        )
+        return 0
+
+    results = []
+    for clip in picked:
+        for platform in platforms:
+            if publish_mod.already_posted(clip, platform):
+                print(f"  clip {clip.clip} already on {platform}", file=sys.stderr)
+                continue
+            result = publisher.publish(clip, platform)
+            publish_mod.record(result)
+            results.append(result)
+            verb = (
+                "would post" if result.dry_run
+                else ("posted" if result.ok else "FAILED")
+            )
+            print(
+                f"  {verb} clip {clip.clip} ({clip.score:.1f}) -> {platform}"
+                f"{'' if result.ok else ': ' + str(result.error)[:160]}",
+                file=sys.stderr,
+            )
+
+    payload = {
+        "job_id": args.job_id,
+        "selected": [c.to_json() for c in picked],
+        "published": [r.to_json() for r in results],
+        "failures": sum(1 for r in results if not r.ok),
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 1 if payload["failures"] else 0
 
 
 def cmd_sources(args: argparse.Namespace) -> int:
@@ -613,6 +684,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_auto.add_argument("--jsonl", action="store_true")
     p_auto.set_defaults(fn=cmd_auto)
+
+    p_pub = sub.add_parser(
+        "publish", help="post the clips of a job that is already rendered"
+    )
+    p_pub.add_argument("job_id")
+    p_pub.add_argument("--dir", help="the job directory, if it is not the local one")
+    p_pub.add_argument("--clips", type=int, default=3)
+    p_pub.add_argument("--min-score", type=float, default=select_mod.DEFAULT_MIN_SCORE)
+    p_pub.add_argument("--platforms", default="tiktok")
+    p_pub.add_argument(
+        "--publish", choices=["dry-run", "zernio", "composio", "postiz"],
+        default="dry-run",
+    )
+    p_pub.add_argument(
+        "--visibility", choices=["private", "unlisted", "public"], default="private"
+    )
+    p_pub.set_defaults(fn=cmd_publish)
 
     p_sources = sub.add_parser("sources", help="discover what to clip (downloads nothing)")
     src_sub = p_sources.add_subparsers(dest="source_cmd", required=True)
