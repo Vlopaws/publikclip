@@ -54,6 +54,24 @@ API_TIMEOUT = 60.0
 _UPLOAD_URL_KEYS = ("uploadUrl", "upload_url", "url", "signedUrl", "presignedUrl")
 _PUBLIC_URL_KEYS = ("publicUrl", "public_url", "mediaUrl", "fileUrl")
 
+# Visibility is not a Zernio-wide concept. Its post schema carries
+# `tiktokSettings.privacyLevel` and nothing equivalent for Instagram or
+# YouTube — checked against the OpenAPI, not assumed. So "private" is
+# honourable on TikTok and simply not expressible on the other two.
+#
+# This publisher recorded a visibility and never sent one. A post asked for
+# as private went out public, and the setting looked like it worked. A
+# control that silently does nothing is worse than no control, so the
+# platforms that cannot honour it now refuse the post instead.
+_TIKTOK_PRIVACY = {
+    "private": "SELF_ONLY",
+    # TikTok has no "unlisted"; self-only is its narrowest setting.
+    "unlisted": "SELF_ONLY",
+    "public": "PUBLIC_TO_EVERYONE",
+}
+# Platforms whose privacy Zernio's post schema cannot set.
+_PUBLIC_ONLY_PLATFORMS = ("instagram", "youtube")
+
 # GET /v1/accounts returns Mongo documents, so the identifier is `_id`.
 # Reading only `accountId`/`id` returned no accounts at all against three
 # genuinely connected ones — the key was fine and the parse was wrong,
@@ -200,6 +218,39 @@ class ZernioPublisher:
                 f"Connected: {', '.join(sorted(connected)) or 'none'}."
             )
 
+        if self.visibility != "public":
+            blind = [p for p in platforms if p in _PUBLIC_ONLY_PLATFORMS]
+            if blind:
+                raise PublishError(
+                    f"Zernio cannot post privately to {', '.join(blind)} — its "
+                    "post schema has no privacy field for them, so anything "
+                    "sent there goes out at the account's default. Either use "
+                    "--visibility public deliberately, or drop those platforms."
+                )
+
+    def tiktok_privacy_options(self, account_id: str) -> list[str]:
+        """What this TikTok account is actually allowed to post as.
+
+        The valid values come from TikTok's creator info for the account,
+        not from a constant — an unaudited app, for instance, may only be
+        permitted SELF_ONLY.
+        """
+        try:
+            payload = self._get(f"/accounts/{account_id}/tiktok/creator-info")
+        except PublishError:
+            return []
+        for key in ("privacyLevelOptions", "privacy_level_options", "options"):
+            found = payload.get(key)
+            if isinstance(found, list):
+                return [str(v) for v in found]
+        info = payload.get("creatorInfo") or payload.get("data") or {}
+        if isinstance(info, dict):
+            for key in ("privacyLevelOptions", "privacy_level_options"):
+                found = info.get(key)
+                if isinstance(found, list):
+                    return [str(v) for v in found]
+        return []
+
     # --- media -----------------------------------------------------------
 
     def upload(self, path: Path) -> str:
@@ -283,6 +334,16 @@ class ZernioPublisher:
                 # Reference only — Zernio's own docs say this is not used as
                 # the caption. The burned-in headline is the one people see.
                 body["title"] = clip.title
+            if platform == "tiktok":
+                wanted = _TIKTOK_PRIVACY[self.visibility]
+                allowed = self.tiktok_privacy_options(account)
+                if allowed and wanted not in allowed:
+                    raise PublishError(
+                        f"TikTok will not accept {wanted} for this account. "
+                        f"It allows: {', '.join(allowed)}."
+                    )
+                body["tiktokSettings"] = {"privacyLevel": wanted}
+
             if clip.hashtags:
                 # Also reference only: the spec states hashtags are NOT
                 # appended to the content, which is why _caption puts them

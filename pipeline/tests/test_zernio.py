@@ -39,10 +39,18 @@ def a_clip(tmp_path, **over):
 class Fake:
     """Stands in for the whole API surface, recording what was asked."""
 
-    def __init__(self, accounts=None, presign=None, fail=None):
+    def __init__(self, accounts=None, presign=None, fail=None, tiktok_options=None):
+        self.tiktok_options = (
+            tiktok_options
+            if tiktok_options is not None
+            else ["PUBLIC_TO_EVERYONE", "SELF_ONLY"]
+        )
+        # All three of the operator's real accounts, so a test about one
+        # platform is not silently a test about a missing connection.
         self.accounts = accounts if accounts is not None else [
             {"platform": "tiktok", "accountId": "acc_tt"},
             {"platform": "instagram", "accountId": "acc_ig"},
+            {"platform": "youtube", "accountId": "acc_yt"},
         ]
         self.presign = presign if presign is not None else {
             "uploadUrl": "https://upload.example/put",
@@ -65,6 +73,8 @@ class Fake:
                 return self._payload
 
         def get(url, **kw):
+            if url.endswith("/tiktok/creator-info"):
+                return Res(200, {"privacyLevelOptions": outer.tiktok_options})
             if "accounts" in outer.fail:
                 return Res(outer.fail["accounts"], text="nope")
             return Res(200, {"accounts": outer.accounts})
@@ -325,3 +335,66 @@ def test_a_successful_post_carries_its_id_back(monkeypatch, tmp_path):
     result = zernio.ZernioPublisher().publish(a_clip(tmp_path), "tiktok")
     assert result.post_id == "post_1"
     assert result.url == "https://x/post_1"
+
+
+# --- visibility ----------------------------------------------------------
+
+def test_a_private_post_tells_tiktok_it_is_private(monkeypatch, tmp_path):
+    """The bug that shipped: the publisher recorded a visibility and never
+    sent one, so a post asked for as private went out public and the setting
+    looked like it had worked."""
+    fake = Fake().install(monkeypatch)
+    zernio.ZernioPublisher(visibility="private").publish(a_clip(tmp_path), "tiktok")
+    assert fake.posts[0]["tiktokSettings"] == {"privacyLevel": "SELF_ONLY"}
+
+
+def test_a_public_post_says_so_too(monkeypatch, tmp_path):
+    fake = Fake().install(monkeypatch)
+    zernio.ZernioPublisher(visibility="public").publish(a_clip(tmp_path), "tiktok")
+    assert fake.posts[0]["tiktokSettings"] == {"privacyLevel": "PUBLIC_TO_EVERYONE"}
+
+
+def test_a_privacy_level_the_account_cannot_use_is_refused(monkeypatch, tmp_path):
+    """An unaudited TikTok app may only be allowed SELF_ONLY. Sending
+    something else would be rejected by TikTok after the upload."""
+    Fake(tiktok_options=["SELF_ONLY"]).install(monkeypatch)
+    result = zernio.ZernioPublisher(visibility="public").publish(
+        a_clip(tmp_path), "tiktok"
+    )
+    assert not result.ok
+    assert "SELF_ONLY" in result.error
+
+
+def test_an_account_that_reports_no_options_is_not_blocked(monkeypatch, tmp_path):
+    # Absence of information is not a refusal; TikTok still validates.
+    fake = Fake(tiktok_options=[]).install(monkeypatch)
+    result = zernio.ZernioPublisher(visibility="private").publish(
+        a_clip(tmp_path), "tiktok"
+    )
+    assert result.ok, result.error
+    assert fake.posts[0]["tiktokSettings"] == {"privacyLevel": "SELF_ONLY"}
+
+
+def test_instagram_and_youtube_refuse_a_private_run_before_it_starts(monkeypatch):
+    """Zernio's post schema has no privacy field for either, so a "private"
+    post there would go out at the account's default. Refusing is honest;
+    publishing publicly while reporting private is not.
+    """
+    Fake().install(monkeypatch)
+    for platform in ("instagram", "youtube"):
+        with pytest.raises(PublishError) as err:
+            zernio.ZernioPublisher(visibility="private").check_ready([platform])
+        assert platform in str(err.value)
+        assert "public" in str(err.value), "say what the alternative is"
+
+
+def test_those_platforms_are_fine_when_public_is_asked_for_deliberately(monkeypatch):
+    Fake().install(monkeypatch)
+    zernio.ZernioPublisher(visibility="public").check_ready(
+        ["instagram", "youtube", "tiktok"]
+    )
+
+
+def test_tiktok_alone_can_still_run_privately(monkeypatch):
+    Fake().install(monkeypatch)
+    zernio.ZernioPublisher(visibility="private").check_ready(["tiktok"])
