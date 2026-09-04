@@ -183,6 +183,9 @@ class RenderStage(Stage):
                     "title": title,
                     "cast": cast,
                     "named": named,
+                    # Kept so publishing can judge the clip without
+                    # re-deriving it from the whole job.
+                    "transcript": spoken[:2000],
                     "description": (copy.get("description") or "").strip() or None,
                     "hashtags": copy.get("hashtags") or [],
                 }

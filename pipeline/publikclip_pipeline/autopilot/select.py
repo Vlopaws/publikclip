@@ -75,6 +75,9 @@ class SelectedClip:
     title: str = ""
     description: str = ""
     hashtags: tuple[str, ...] = ()
+    # The clip's own words, kept so an unattended run can judge what it is
+    # about before publishing it. See autopilot.review.
+    transcript: str = ""
 
     def caption(self, limit: int = 180) -> str:
         """What the post should say, best available first.
@@ -171,6 +174,7 @@ def select(
                 title=output.get("title") or "",
                 description=output.get("description") or "",
                 hashtags=tuple(output.get("hashtags") or ()),
+                transcript=output.get("transcript") or "",
             )
         )
 

@@ -21,6 +21,7 @@ from .. import config, stages
 from ..jobs import queue
 from ..sources import SourceItem, unseen
 from . import publish as publish_mod
+from . import review
 from .select import DEFAULT_MAX_DURATION, DEFAULT_MIN_SCORE, SelectedClip, select
 
 
@@ -29,6 +30,7 @@ class CandidateOutcome:
     item: SourceItem
     job_id: str | None = None
     selected: list[SelectedClip] = field(default_factory=list)
+    held: list[dict] = field(default_factory=list)
     published: list[publish_mod.PublishResult] = field(default_factory=list)
     error: str | None = None
 
@@ -37,6 +39,7 @@ class CandidateOutcome:
             "source": self.item.to_json(),
             "job_id": self.job_id,
             "selected": [c.to_json() for c in self.selected],
+            "held": self.held,
             "published": [p.to_json() for p in self.published],
             "error": self.error,
         }
@@ -67,6 +70,7 @@ class RunReport:
             "publisher": self.publisher,
             "discovered": self.discovered,
             "clips_selected": self.clips_selected,
+            "clips_held": sum(len(o.held) for o in self.outcomes),
             "posts_ok": self.posts_ok,
             "failures": self.failures,
             "candidates": [o.to_json() for o in self.outcomes],
@@ -164,6 +168,20 @@ def run(
         note("selected", f"  {len(outcome.selected)} clip(s) above {min_score}")
 
         for clip in outcome.selected:
+            # An unattended run has nobody to look at a clip before it goes
+            # out. Hold anything that would risk the account rather than
+            # publish it; it stays rendered and one command from posting.
+            verdict = review.check(clip.transcript, clip.title, clip.description)
+            if not verdict.ok:
+                outcome.held.append(
+                    {"clip": clip.clip, "score": clip.score, **verdict.to_json()}
+                )
+                note(
+                    "hold",
+                    f"  HELD clip {clip.clip} ({', '.join(verdict.reasons)}) — "
+                    "rendered, not posted",
+                )
+                continue
             for platform in platforms:
                 if publish_mod.already_posted(clip, platform):
                     note("skip", f"  clip {clip.clip} already on {platform}")
