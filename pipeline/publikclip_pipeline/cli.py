@@ -295,7 +295,14 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
     try:
-        publisher = autopilot.make_publisher(args.publish, visibility=args.visibility)
+        timing = {}
+        if getattr(args, "stagger", 0):
+            timing["stagger_minutes"] = args.stagger
+        if getattr(args, "delay", 0):
+            timing["schedule_in_minutes"] = args.delay
+        publisher = autopilot.make_publisher(
+            args.publish, visibility=args.visibility, **timing
+        )
         publisher.check_ready(platforms)
     except autopilot.PublishError as err:
         print(str(err), file=sys.stderr)
@@ -783,6 +790,14 @@ def main(argv: list[str] | None = None) -> int:
     p_pub.add_argument(
         "--publish", choices=["dry-run", "zernio", "composio", "postiz"],
         default="dry-run",
+    )
+    p_pub.add_argument(
+        "--stagger", type=int, default=0, metavar="MINUTES",
+        help="minutes between one clip and the next (0 = post everything now)",
+    )
+    p_pub.add_argument(
+        "--delay", type=int, default=0, metavar="MINUTES",
+        help="minutes before the first clip goes out",
     )
     p_pub.add_argument(
         "--visibility", choices=["private", "unlisted", "public"], default="private"

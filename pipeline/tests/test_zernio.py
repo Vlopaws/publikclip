@@ -456,3 +456,60 @@ def test_an_account_limited_to_self_only_refuses_a_public_post(monkeypatch, tmp_
     result = zernio.ZernioPublisher(visibility="public").publish(a_clip(tmp_path), "tiktok")
     assert not result.ok
     assert "SELF_ONLY" in result.error
+
+
+# --- spacing a batch out -------------------------------------------------
+#
+# schedule_in_minutes gave every post in a run the same scheduledFor, which
+# delays a burst without breaking it up: eight clips across three networks
+# is twenty-four posts landing in one second, on accounts a few days old.
+
+def _when(body):
+    """Minutes from now that this post is scheduled for, rounded."""
+    import datetime as dt
+    t = dt.datetime.strptime(body["scheduledFor"], "%Y-%m-%dT%H:%M:%SZ")
+    t = t.replace(tzinfo=dt.timezone.utc)
+    return round((t - dt.datetime.now(dt.timezone.utc)).total_seconds() / 60)
+
+
+def test_clips_are_spaced_by_the_gap(monkeypatch, tmp_path):
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(stagger_minutes=20)
+    for i in range(3):
+        pub.publish(a_clip(tmp_path, clip=i), "tiktok")
+    assert fake.posts[0].get("publishNow") is True, "the first goes out now"
+    assert [_when(b) for b in fake.posts[1:]] == [20, 40]
+
+
+def test_one_clip_reaches_every_network_at_the_same_moment(monkeypatch, tmp_path):
+    """Three accounts exist so a clip can be cross-posted, not so it can be
+    dripped out to one network at a time."""
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(stagger_minutes=20)
+    clip = a_clip(tmp_path, clip=4)
+    for platform in ("tiktok", "instagram", "youtube"):
+        pub.publish(clip, platform)
+    assert all(b.get("publishNow") for b in fake.posts)
+    assert len(fake.posts) == 3
+
+    pub.publish(a_clip(tmp_path, clip=7), "tiktok")
+    assert _when(fake.posts[3]) == 20, "the next clip takes the next slot"
+
+
+def test_a_delay_shifts_the_whole_batch(monkeypatch, tmp_path):
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(schedule_in_minutes=60, stagger_minutes=20)
+    for i in range(2):
+        pub.publish(a_clip(tmp_path, clip=i), "tiktok")
+    assert [_when(b) for b in fake.posts] == [60, 80]
+    assert not any(b.get("publishNow") for b in fake.posts)
+
+
+def test_a_scheduled_post_never_also_says_publish_now(monkeypatch, tmp_path):
+    """The two are exclusive; a post asked for later would go out at once."""
+    fake = Fake().install(monkeypatch)
+    pub = zernio.ZernioPublisher(stagger_minutes=30)
+    for i in range(2):
+        pub.publish(a_clip(tmp_path, clip=i), "tiktok")
+    assert "publishNow" not in fake.posts[1]
+    assert "scheduledFor" in fake.posts[1]

@@ -106,6 +106,7 @@ class ZernioPublisher:
         self,
         visibility: str = "private",
         schedule_in_minutes: int | None = None,
+        stagger_minutes: int | None = None,
     ):
         if visibility not in VISIBILITIES:
             raise PublishError(
@@ -121,6 +122,15 @@ class ZernioPublisher:
         self._key = key
         self.visibility = visibility
         self.schedule_in_minutes = schedule_in_minutes
+        # Minutes between one clip and the next. schedule_in_minutes alone
+        # gives every post in a batch the same scheduledFor, which delays a
+        # burst without breaking it up: eight clips across three networks is
+        # twenty-four posts landing in one second, on accounts a few days
+        # old. The gap is per clip, not per post -- a clip going to three
+        # networks at once is cross-posting, which is what these accounts
+        # are for.
+        self.stagger_minutes = stagger_minutes
+        self._slots: dict[int, int] = {}
         self._accounts: dict[str, str] | None = None
         # publish() is called once per clip per platform, and the file does
         # not change between those calls. Three clips across three networks
@@ -385,11 +395,17 @@ class ZernioPublisher:
                 # in the text itself. Sent here too so they survive in
                 # Zernio's record of the post.
                 body["hashtags"] = [t.lstrip("#") for t in clip.hashtags]
-            if self.schedule_in_minutes:
+            delay = self.schedule_in_minutes or 0
+            if self.stagger_minutes:
+                # Slots are handed out in the order clips are first seen, so
+                # the batch keeps the order the scorer chose.
+                slot = self._slots.setdefault(clip.clip, len(self._slots))
+                delay += slot * self.stagger_minutes
+            if delay:
                 import datetime as _dt
 
                 when = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(
-                    minutes=self.schedule_in_minutes
+                    minutes=delay
                 )
                 body["scheduledFor"] = when.strftime("%Y-%m-%dT%H:%M:%SZ")
                 body["timezone"] = "UTC"
