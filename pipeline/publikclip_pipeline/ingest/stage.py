@@ -26,7 +26,12 @@ def _sample_hash(path: Path) -> str:
 
 class IngestStage(Stage):
     name = "ingest"
-    schema_version = 1
+    # 2: adds "cast". Bumped late, and that is the point -- the field was
+    # added at version 1, so every checkpoint written before it stayed
+    # valid, handed downstream a None, and silently switched off the check
+    # that stops a title naming the wrong person. A stage that grows a field
+    # has changed shape; the version says so.
+    schema_version = 2
 
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         media = Path(data.get("media_path", ""))

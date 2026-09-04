@@ -30,6 +30,7 @@ in a title only when the clip's own words contain it.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 import unicodedata
 
 # Lines that introduce a cast list, across the phrasings French and English
@@ -213,3 +214,70 @@ def strip_unsupported(title: str, allowed: list[str], full_cast: list[str]) -> s
         if _names_a_person(tokens, name):
             return ""
     return title
+
+
+# How close a word must be to a cast member's name to be that name misspelt.
+#
+# Measured on the run that produced it: the transcript said "Gotha" 23 times
+# and "Gotaga" 13, so the model wrote "Gotha" in a title by faithfully
+# copying what it was given -- the fabrication was the transcriber's, not
+# the model's. Gotha scores 0.727 against Gotaga; the nearest thing that
+# must NOT be corrected (Gotaga against an unrelated "Gotham") scores 0.667.
+# The gate sits between them, with the shared-prefix rule below carrying
+# most of the weight.
+NAME_MISHEARD_RATIO = 0.70
+
+# A mishearing keeps the start of a name and mangles the rest -- "Gotaga"
+# becomes "Gotha", never "Rotaga". Requiring three shared characters is what
+# separates a misspelling from a different person who merely rhymes.
+NAME_PREFIX = 3
+
+
+def _misheard_as(word: str, name: str) -> bool:
+    """Is `word` this name, misheard?"""
+    a, b = _fold(word), _fold(name)
+    if not a or not b or a == b:
+        return False  # already correct, or nothing to compare
+    if a[:NAME_PREFIX] != b[:NAME_PREFIX]:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= NAME_MISHEARD_RATIO
+
+
+def correct_spelling(text: str, cast: list[str]) -> str:
+    """Respell a cast member's name that the transcriber got wrong.
+
+    The cast list comes from the page -- "(ft Maxime Biaggi, Gotaga &
+    Billy)" -- and is the only ground truth for how a name is spelt. A
+    transcript is not: ASR renders "Gotaga" as "Gotha" and "Squeezie" as
+    "Squeezil", and anything written from that transcript inherits the
+    error.
+
+    Correcting is right where stripping would be wrong. The person really is
+    in the video; only the spelling is not. A title that drops the name says
+    less than one that spells it properly, and a viewer searching the name
+    finds neither the misspelling nor the silence.
+    """
+    if not text or not cast:
+        return text
+
+    # Longest first, so "Maxime Biaggi" is considered before "Maxime".
+    targets: list[str] = []
+    for name in cast:
+        targets.append(name)
+        first = name.split()[0] if name.split() else ""
+        if first and first != name:
+            targets.append(first)
+    targets.sort(key=len, reverse=True)
+
+    def fix(match: re.Match) -> str:
+        word = match.group(0)
+        for name in targets:
+            if " " in name:
+                continue  # a single token cannot be a two-word name
+            if _misheard_as(word, name):
+                return name
+        return word
+
+    # Only capitalised words: a name sits in proper-noun position, and a
+    # lower-case word that happens to resemble one is a word.
+    return re.sub(r"\b[A-ZÀ-ÖØ-Þ][\w'’\-]+", fix, text)

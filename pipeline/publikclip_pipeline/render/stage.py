@@ -133,6 +133,15 @@ class RenderStage(Stage):
                     ctx.emit(-1, f"clip {i + 1}: no title ({err})")
 
             title = (copy.get("title") or "").strip() or None
+            # The transcript spells names the way they were heard, and copy
+            # written from it inherits every mishearing. The cast list is the
+            # only ground truth for a spelling, so it is applied first --
+            # before the check below, which would otherwise be judging a name
+            # the model never chose.
+            title = naming.correct_spelling(title, cast) if title else title
+            for key in ("description",):
+                if copy.get(key):
+                    copy[key] = naming.correct_spelling(copy[key], cast)
             if title and cast:
                 # The prompt forbids guessing; this checks it was obeyed.
                 # A title naming the wrong cast member is a false statement

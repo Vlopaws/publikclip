@@ -19,6 +19,16 @@ TARGET_LEN = 42.0
 SNAP_RADIUS = 6.0
 DEDUPE_IOU = 0.55
 
+# ...and how much of the shorter clip the longer one may repeat.
+#
+# IoU divides by the union, which forgives a clip that shares most of itself
+# with another as long as it also reaches somewhere new: 1847-1890 shared 25
+# of its 43 seconds with 1865-1910 and scored 0.40, under the 0.55 gate, so
+# both were rendered and both would have been posted. A viewer does not
+# compute a union -- they recognise footage they have already watched. What
+# matters is the fraction of the smaller clip that is not new.
+DEDUPE_CONTAINMENT = 0.5
+
 # A clip must not open on the source's own editing. Starting a second
 # before a cut means the viewer sees a moment of the outgoing shot, then a
 # wipe, then the real content — which reads as a broken upload rather than
@@ -161,6 +171,15 @@ def window_around(
     return (round(start, 3), round(end, 3))
 
 
+def _shared(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Fraction of the shorter clip that the other one also covers."""
+    inter = min(a[1], b[1]) - max(a[0], b[0])
+    shorter = min(a[1] - a[0], b[1] - b[0])
+    if inter <= 0 or shorter <= 0:
+        return 0.0
+    return inter / shorter
+
+
 def _iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     inter = min(a[1], b[1]) - max(a[0], b[0])
     if inter <= 0:
@@ -169,7 +188,11 @@ def _iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     return inter / union
 
 
-def dedupe(candidates: list[Candidate], iou: float = DEDUPE_IOU) -> list[Candidate]:
+def dedupe(
+    candidates: list[Candidate],
+    iou: float = DEDUPE_IOU,
+    containment: float = DEDUPE_CONTAINMENT,
+) -> list[Candidate]:
     """Keep the higher-scored of any overlapping pair (autoclip pattern).
 
     Forced candidates rank ahead of everything else, whatever the curve
@@ -182,7 +205,15 @@ def dedupe(candidates: list[Candidate], iou: float = DEDUPE_IOU) -> list[Candida
     for cand in sorted(
         candidates, key=lambda c: (c.dictated, c.forced, c.curve_score), reverse=True
     ):
-        if all(_iou((cand.start, cand.end), (k.start, k.end)) < iou for k in kept):
+        # A cut the operator dictated is kept whatever it repeats: they named
+        # these bounds, and two overlapping dictated cuts are two clips they
+        # asked for, not a mistake to clean up.
+        span = (cand.start, cand.end)
+        if cand.dictated or all(
+            _iou(span, (k.start, k.end)) < iou
+            and _shared(span, (k.start, k.end)) < containment
+            for k in kept
+        ):
             kept.append(cand)
         if len(kept) >= MAX_CANDIDATES:
             break

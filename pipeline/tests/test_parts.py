@@ -76,6 +76,28 @@ def test_overlapping_clips_are_not_parts():
     assert parts.group([(100.0, 150.0), (140.0, 190.0)]) == {}
 
 
+def test_an_overlapping_neighbour_does_not_sever_a_pair():
+    """The real failure. 1820-1865 and 1865-1910 touch to the second, but a
+    third window at 1847-1890 overlaps both and sorts between them, so a
+    file-order walk broke the chain and the pair came out unlabelled."""
+    got = parts.group([(1820.0, 1865.0), (1847.2, 1890.1), (1865.0, 1910.0)])
+    assert got == {0: (1, 2), 2: (2, 2)}, "the intruder is not part of anything"
+
+
+def test_the_nearest_successor_wins():
+    """Two clips both starting near the end of a third: only one continues it,
+    and it is the one that actually touches."""
+    got = parts.group([(0.0, 40.0), (40.0, 80.0), (42.0, 82.0)])
+    assert got[0] == (1, 2) and got[1] == (2, 2)
+    assert 2 not in got
+
+
+def test_a_clip_continues_at_most_one_other():
+    got = parts.group([(0.0, 40.0), (0.5, 40.5), (40.5, 80.0)])
+    runs = [i for i in got]
+    assert len(runs) == 2, "one pair, not two claims on the same successor"
+
+
 # --- labelling -----------------------------------------------------------
 
 def test_the_marker_is_appended():

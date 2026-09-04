@@ -33,28 +33,41 @@ def group(bounds: list[tuple[float, float]]) -> dict[int, tuple[int, int]]:
     nothing about anything.
     """
     order = sorted(range(len(bounds)), key=lambda i: bounds[i][0])
-    runs: list[list[int]] = []
-    current: list[int] = []
 
-    for idx in order:
-        if not current:
-            current = [idx]
-            continue
-        previous_end = bounds[current[-1]][1]
-        if 0 <= bounds[idx][0] - previous_end <= ADJACENT_GAP_SEC:
-            current.append(idx)
-        else:
-            runs.append(current)
-            current = [idx]
-    if current:
-        runs.append(current)
+    # Which clip continues which. Walking the list in file order and breaking
+    # the run at the first neighbour that does not fit was wrong: a third clip
+    # overlapping both halves of a pair sorts between them and severed the
+    # link, so 30:20-31:05 and 31:05-31:50 -- which touch to the second -- came
+    # out unlabelled. An overlapping neighbour is skipped, not fatal.
+    successor: dict[int, int] = {}
+    continued: set[int] = set()
+    for position, idx in enumerate(order):
+        end = bounds[idx][1]
+        best: int | None = None
+        best_gap: float | None = None
+        for other in order[position + 1:]:
+            gap = bounds[other][0] - end
+            if gap > ADJACENT_GAP_SEC:
+                break  # sorted by start, so every later clip is further still
+            if gap < 0 or other in continued:
+                continue  # overlaps this one, or already continues another
+            if best_gap is None or gap < best_gap:
+                best, best_gap = other, gap
+        if best is not None:
+            successor[idx] = best
+            continued.add(best)
 
     labels: dict[int, tuple[int, int]] = {}
-    for run in runs:
+    for idx in order:
+        if idx in continued:
+            continue  # not the head of its run
+        run = [idx]
+        while run[-1] in successor:
+            run.append(successor[run[-1]])
         if not (2 <= len(run) <= MAX_PART_RUN):
             continue
-        for position, idx in enumerate(run, start=1):
-            labels[idx] = (position, len(run))
+        for position, member in enumerate(run, start=1):
+            labels[member] = (position, len(run))
     return labels
 
 
