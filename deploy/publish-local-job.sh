@@ -23,6 +23,14 @@ VISIBILITY=${VISIBILITY:-private}
 CLIPS=${CLIPS:-3}
 MIN_SCORE=${MIN_SCORE:-40}
 PUBLISH=${PUBLISH:-dry-run}
+# Exact clip numbers, when the choice has already been made by someone who
+# watched them. Empty means select by score.
+ONLY=${ONLY:-}
+# Minutes between clips, and before the first one. Zernio holds a scheduled
+# post itself, so the machine only has to stay up long enough to upload the
+# files and create the posts -- not until they go out.
+STAGGER=${STAGGER:-0}
+DELAY=${DELAY:-0}
 
 PROJECT=${PROJECT:-gen-lang-client-0653010260}
 ZONE=${ZONE:-europe-west9-a}
@@ -40,6 +48,12 @@ until ssh_ "true" 2>/dev/null; do sleep 10; done
 
 echo "== pausing the burst schedule while we work"
 ssh_ "sudo touch /opt/publikclip/no-burst && sudo shutdown -c 2>/dev/null; true"
+
+# The flags this script passes have to exist on the box that runs them. A
+# publish that fails on an unknown argument has already started the machine,
+# uploaded the clips and woken the operator.
+echo "== updating the checkout"
+ssh_ "cd /opt/publikclip/src && sudo -u publikclip git fetch --quiet fork &&   sudo -u publikclip git checkout --quiet -B hardening-and-llm-backends   fork/hardening-and-llm-backends && git log --oneline -1"
 
 echo "== shipping the job"
 ssh_ "mkdir -p $REMOTE/clips"
@@ -63,10 +77,13 @@ print('repointed', len(d['data']['outputs']), 'clips')
 PY"
 
 echo "== publishing ($PUBLISH, $VISIBILITY, $PLATFORMS)"
+echo "   clips=${ONLY:-top $CLIPS above $MIN_SCORE}; first in ${DELAY}min, then every ${STAGGER}min"
 ssh_ "sudo -u publikclip HOME=/opt/publikclip /opt/publikclip/.local/bin/uv \
   --directory /opt/publikclip/src/pipeline run publikclip publish '$JOB' \
   --dir '$REMOTE' --platforms '$PLATFORMS' --publish '$PUBLISH' \
-  --visibility '$VISIBILITY' --clips '$CLIPS' --min-score '$MIN_SCORE'" || \
+  --visibility '$VISIBILITY' --clips '$CLIPS' --min-score '$MIN_SCORE' \
+  --stagger '$STAGGER' --delay '$DELAY' \
+  ${ONLY:+--only '$ONLY'}" || \
   echo "!! publishing reported a failure; the machine is still stopped below"
 
 echo "== lifting the pause and stopping"
