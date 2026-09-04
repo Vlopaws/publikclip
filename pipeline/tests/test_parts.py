@@ -131,3 +131,43 @@ def test_a_dictated_cut_outside_the_video_is_dropped():
 def test_the_cut_flag_reads_the_same_timecodes_as_focus():
     assert parse_focus(["30:20-31:05"]) == [[1820.0, 1865.0]]
     assert parse_focus(["31:05-31:50"]) == [[1865.0, 1910.0]]
+
+
+# --- dictated is not the same as forced ---------------------------------
+
+def test_a_dictated_cut_is_marked_as_such():
+    """`--focus` says where to look and still competes on merit.
+    `--cut` says what to produce and does not."""
+    curve = np.full(4000, 0.4)
+    segs = [{"start": float(i), "end": float(i) + 3.0, "words": []}
+            for i in range(0, 4000, 3)]
+    out = windows.extract(
+        curve, {}, segs, 4000.0,
+        focus=[(500, 700)], exact=[(1820.0, 1865.0)],
+    )
+    mine = next(c for c in out if abs(c.start - 1820.0) < 0.01)
+    assert mine.dictated and mine.forced
+
+    from_focus = [c for c in out if c.forced and not c.dictated]
+    assert from_focus, "a focus should still produce forced-but-not-dictated windows"
+
+
+def test_a_dictated_cut_outranks_everything_in_dedupe():
+    """It was computed, ranked on merit and evicted at the cut — the worst
+    of every option."""
+    curve = np.full(4000, 0.4)
+    curve[1830] = 0.99  # a curve peak overlapping the dictated bounds
+    segs = [{"start": float(i), "end": float(i) + 3.0, "words": []}
+            for i in range(0, 4000, 3)]
+    out = windows.extract(curve, {}, segs, 4000.0, exact=[(1820.0, 1865.0)])
+    survivors = [c for c in out if 1810 <= c.start <= 1830]
+    assert any(c.dictated for c in survivors), "the dictated cut lost to a peak"
+
+
+def test_the_flag_survives_serialisation():
+    curve = np.full(200, 0.4)
+    segs = [{"start": 0.0, "end": 3.0, "words": []}]
+    out = windows.extract(curve, {}, segs, 200.0, exact=[(10.0, 60.0)])
+    row = next(c for c in out if c.dictated).to_json()
+    assert row["dictated"] is True
+    assert row["forced"] is True

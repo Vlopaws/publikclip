@@ -39,14 +39,22 @@ class Candidate:
     curve_score: float
     channel_scores: dict[str, float] = field(default_factory=dict)
     # True when this window exists because the operator named its region,
-    # not because the curve found a peak there.
+    # not because the curve found a peak there. It still competes on merit
+    # against the curve's own picks — a focus says where to look.
     forced: bool = False
+    # True when the operator gave these exact bounds. Not a preference: a
+    # dictated cut reaches the render, whatever anything downstream thinks
+    # of it. Conflating the two meant `--cut 30:20-31:05` was computed,
+    # scored, ranked fifth on merit and dropped by a four-clip limit — the
+    # operator asked for that clip and did not get it.
+    dictated: bool = False
 
     def to_json(self) -> dict:
         return {
             "start": round(self.start, 3),
             "end": round(self.end, 3),
             "forced": self.forced,
+            "dictated": self.dictated,
             "peak_time": round(self.peak_time, 3),
             "curve_score": round(self.curve_score, 4),
             "channel_scores": self.channel_scores,
@@ -172,7 +180,7 @@ def dedupe(candidates: list[Candidate], iou: float = DEDUPE_IOU) -> list[Candida
     """
     kept: list[Candidate] = []
     for cand in sorted(
-        candidates, key=lambda c: (c.forced, c.curve_score), reverse=True
+        candidates, key=lambda c: (c.dictated, c.forced, c.curve_score), reverse=True
     ):
         if all(_iou((cand.start, cand.end), (k.start, k.end)) < iou for k in kept):
             kept.append(cand)
@@ -259,6 +267,7 @@ def extract(
                     if len(ch) > a
                 },
                 forced=True,
+                dictated=True,
             )
         )
 

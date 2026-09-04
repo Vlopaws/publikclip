@@ -112,7 +112,10 @@ class ScoreStage(Stage):
             start, end = cand["start"], cand["end"]
             ctx.emit(i / max(1, len(candidates)) * 0.6, f"Scoring moment {i + 1}/{len(candidates)}…")
             labeled, flat = _transcript_slice(segments, start, end)
-            if len(flat.split()) < 20:
+            if len(flat.split()) < 20 and not cand.get("dictated"):
+                # Too little speech to judge — unless somebody dictated
+                # these bounds, in which case they are not asking for a
+                # judgement. A rap hook can be six words.
                 continue
             window_events = _events_in(timeline, start, end)
             near_laughs = [e for e in _events_in(timeline, start, end, pad=3.0) if e["type"] == "laugh"]
@@ -143,6 +146,7 @@ class ScoreStage(Stage):
                 {
                     "start": start,
                     "end": end,
+                    "dictated": bool(cand.get("dictated")),
                     "curve_score": cand["curve_score"],
                     "channel_scores": cand["channel_scores"],
                     "t1_raw": t1,
@@ -168,7 +172,15 @@ class ScoreStage(Stage):
 
         scored.sort(key=_text_rank, reverse=True)
         take = getattr(ctx.settings, "max_finalists", None) or SELECT_COUNT
-        finalists = scored[:take]
+
+        # A cut the operator dictated is not a suggestion and does not
+        # compete: it reaches the render whatever it scores. Ranking it on
+        # merit dropped it at the finalist limit — computed, scored, and
+        # thrown away, which is the worst of every option.
+        dictated = [s for s in scored if s.get("dictated")]
+        rest = [s for s in scored if not s.get("dictated")]
+        finalists = dictated + rest[: max(0, take - len(dictated))]
+        finalists.sort(key=lambda s: s["start"])
 
         # T2 visual pass + music brief on finalists only.
         # Capability, not identity: any multimodal backend gets the T2
