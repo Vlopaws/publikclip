@@ -224,7 +224,13 @@ def extract(
     duration: float,
     focus: list[tuple[float, float]] | None = None,
     scene_times: list[float] | None = None,
+    exact: list[tuple[float, float]] | None = None,
 ) -> list[Candidate]:
+    """`focus` biases where windows are looked for; `exact` states where they
+    are. A focus range still lets the curve choose within it — an exact cut
+    does not, because somebody watched the video and picked the bounds, and
+    second-guessing that is the one thing they did not ask for.
+    """
     seg_starts, seg_ends = sentence_boundaries(segments)
     cuts = np.asarray(sorted(scene_times or []), dtype=float)
     peaks = local_maxima(curve)
@@ -233,6 +239,29 @@ def extract(
         forced_peaks = set(focus_peaks(curve, focus))
         peaks = sorted(forced_peaks | set(peaks))
     out: list[Candidate] = []
+
+    # Stated bounds go in first and unmodified: no sentence snapping, no
+    # transition nudging, no length clamp. They came from a person watching.
+    for start, end in exact or []:
+        start, end = max(0.0, float(start)), min(duration, float(end))
+        if end <= start:
+            continue
+        a, b = int(start), max(int(start) + 1, int(np.ceil(end)))
+        out.append(
+            Candidate(
+                start=round(start, 3),
+                end=round(end, 3),
+                peak_time=float((start + end) / 2),
+                curve_score=float(np.mean(curve[a : min(b, len(curve))])),
+                channel_scores={
+                    name: round(float(np.mean(ch[a : min(b, len(ch))])), 4)
+                    for name, ch in channels.items()
+                    if len(ch) > a
+                },
+                forced=True,
+            )
+        )
+
     for peak in peaks:
         window = window_around(peak, curve, seg_starts, seg_ends, duration, cuts)
         if window is None:

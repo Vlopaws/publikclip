@@ -100,6 +100,9 @@ def _apply_common(settings, args) -> None:
     focus = parse_focus(getattr(args, "focus", None))
     if focus:
         settings.focus = focus
+    cuts = parse_focus(getattr(args, "cut", None))
+    if cuts:
+        settings.cut = cuts
     if getattr(args, "max_clips", None):
         settings.max_finalists = args.max_clips
 
@@ -118,7 +121,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if job is None:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
-    if args.llm or args.captions or args.camera or args.focus or args.max_clips:
+    if (args.llm or args.captions or args.camera or args.focus
+            or args.max_clips or args.cut):
         settings = config.Settings.from_json(json.loads(job.settings_json))
         _apply_common(settings, args)
         new_json = json.dumps(settings.to_json())
@@ -669,6 +673,10 @@ def main(argv: list[str] | None = None) -> int:
              "(repeatable, comma-separated accepted)",
     )
     p_run.add_argument(
+        "--cut", action="append", metavar="START-END",
+        help="cut exactly this, bounds used as given, e.g. 30:20-31:05 (repeatable)",
+    )
+    p_run.add_argument(
         "--max-clips", type=int, default=None,
         help="how many scored moments reach camera and render (default 12)",
     )
@@ -683,6 +691,10 @@ def main(argv: list[str] | None = None) -> int:
         "--focus", action="append", metavar="START-END",
         help="cut this region whatever the interest curve thinks, e.g. 25:00-36:00 "
              "(repeatable, comma-separated accepted)",
+    )
+    p_resume.add_argument(
+        "--cut", action="append", metavar="START-END",
+        help="cut exactly this, bounds used as given, e.g. 30:20-31:05 (repeatable)",
     )
     p_resume.add_argument(
         "--max-clips", type=int, default=None,

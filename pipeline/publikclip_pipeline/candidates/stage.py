@@ -97,6 +97,7 @@ class CandidatesStage(Stage):
             curve, channels, segments, duration,
             focus=[tuple(s) for s in (getattr(ctx.settings, "focus", None) or [])],
             scene_times=scene_times,
+            exact=[tuple(c) for c in (getattr(ctx.settings, "cut", None) or [])],
         )
         if not candidates:
             raise StageError(

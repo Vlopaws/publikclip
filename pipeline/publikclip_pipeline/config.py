@@ -143,6 +143,9 @@ class Settings:
     # stretch that is quiet but good never reaches the cut — see
     # candidates.windows.focus_peaks for the measurement that motivated it.
     focus: list = field(default_factory=list)
+    # Exact windows the operator dictated, as [[start_sec, end_sec], ...].
+    # Unlike focus these are not suggestions: the bounds are used as given.
+    cut: list = field(default_factory=list)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     # Defaults to the backend that cannot generate a bill. Every hosted

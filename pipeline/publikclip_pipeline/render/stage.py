@@ -25,6 +25,7 @@ class RenderStage(Stage):
         from ..captions import ass as ass_mod
         from ..scoring import llm as llm_mod
         from ..scoring import rubric
+        from ..autopilot import parts as parts_mod
         from ..sources import naming
         from . import ffmpeg_bin, renderer
 
@@ -63,6 +64,11 @@ class RenderStage(Stage):
             headline_client = llm_mod.make_client(ctx.settings.llm_mode)
         except llm_mod.LlmError as err:
             ctx.emit(-1, f"No titles this run ({err})")
+
+        # Clips cut back to back are one moment in two pieces, and a viewer
+        # who meets the second one first cannot tell. Worked out here
+        # because it is a fact about the cut, not something to ask a model.
+        part_of = parts_mod.group([(c["start"], c["end"]) for c in score["clips"]])
 
         out_dir = ctx.job_dir / "clips"
         out_dir.mkdir(exist_ok=True)
@@ -140,6 +146,7 @@ class RenderStage(Stage):
                         "clip does not",
                     )
                 title = kept or None
+            title = parts_mod.label(title, part_of.get(i)) if title else title
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
                 ass_mod.build_ass(
@@ -181,6 +188,7 @@ class RenderStage(Stage):
                     "event_tags": len(clip_events),
                     "mode": mode,
                     "title": title,
+                    "part": list(part_of[i]) if i in part_of else None,
                     "cast": cast,
                     "named": named,
                     # Kept so publishing can judge the clip without
