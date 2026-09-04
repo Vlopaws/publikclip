@@ -103,6 +103,7 @@ class CameraStage(Stage):
                             "mode": shape.mode,
                             "face_coverage": round(shape.face_coverage, 3),
                             "face_height": round(shape.face_height, 3),
+                            "crowd": round(shape.crowd, 2),
                             "reason": shape.reason,
                             "picture_box": list(framing_mod.picture_box(shape.mode)),
                             "title_band": list(band) if band else None,
@@ -121,6 +122,7 @@ class CameraStage(Stage):
                     "mode": shape.mode,
                     "face_coverage": round(shape.face_coverage, 3),
                     "face_height": round(shape.face_height, 3),
+                    "crowd": round(shape.crowd, 2),
                 }
             )
 

@@ -273,3 +273,69 @@ def test_both_branches_read_the_same_crop():
 def test_subtitles_chain_onto_the_composed_frame():
     parts = ["sendcmd=x"] + renderer._compose("wide", (1440, 1080, 240, 0)) + ["subtitles=f"]
     assert renderer._join(parts).endswith("setsar=1,subtitles=f")
+
+
+# --- a crowded shot ------------------------------------------------------
+
+def crowd_analysis(n_people, frames=100, height=0.25):
+    """n people on screen at the same time, for the whole clip."""
+    return FakeAnalysis(
+        frames,
+        [FakeTrack(0, [height] * frames, [0.3] * frames) for _ in range(n_people)],
+    )
+
+
+def test_three_people_at_once_go_wide():
+    """Reported from a real clip: face tracking swings when several people
+    are in shot, and speaker detection is least reliable exactly then."""
+    shape = framing.decide(crowd_analysis(3))
+    assert shape.mode == "wide"
+    assert "at once" in shape.reason
+
+
+def test_two_people_still_get_a_vertical_cut():
+    """Two is a conversation: the camera cuts between them and it reads."""
+    assert framing.decide(crowd_analysis(2)).mode == "vertical"
+
+
+def test_one_person_is_unaffected():
+    assert framing.decide(crowd_analysis(1)).mode == "vertical"
+
+
+def test_people_taking_turns_alone_are_not_a_crowd():
+    """Three sequential close-ups crop beautifully; three people in one shot
+    do not. Counting who appears at some point would confuse them."""
+    frames = 90
+    tracks = [
+        FakeTrack(0, [0.25] * 30, [0.3] * 30),
+        FakeTrack(30, [0.25] * 30, [0.3] * 30),
+        FakeTrack(60, [0.25] * 30, [0.3] * 30),
+    ]
+    analysis = FakeAnalysis(frames, tracks)
+    assert framing.crowding(analysis) == 1
+    assert framing.decide(analysis).mode == "vertical"
+
+
+def test_crowding_is_measured_and_recorded():
+    shape = framing.decide(crowd_analysis(4))
+    assert shape.crowd == 4
+    assert shape.mode == "wide"
+
+
+def test_an_empty_analysis_has_no_crowd():
+    assert framing.crowding(FakeAnalysis(50, [])) == 0.0
+
+
+def test_a_crowded_wide_cut_is_still_a_tripod():
+    """The whole point: wide already means centred, unzoomed and without
+    punch-ins, so a crowded clip inherits a still camera."""
+    from publikclip_pipeline.camera import director
+
+    assert framing.decide(crowd_analysis(5)).mode == "wide"
+    # director.build_trajectory parks the camera in wide mode; guard that
+    # the contract it relies on has not moved.
+    import inspect
+
+    source = inspect.getsource(director.build_trajectory)
+    assert "wide = mode == \"wide\"" in source
+    assert "and not wide" in source

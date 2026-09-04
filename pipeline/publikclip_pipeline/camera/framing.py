@@ -52,6 +52,21 @@ MIN_FACE_COVERAGE = 0.5
 # a tight cut of a gameplay clip shows none of what happened.
 MIN_FACE_HEIGHT = 0.16
 
+# ...and how many people can be on screen before following any one of them
+# stops making sense.
+#
+# A 9:16 crop shows one person. With two, the camera picks whoever is
+# speaking and cuts between them, which reads fine. With three or more it
+# swings — and active-speaker detection is least reliable exactly then,
+# because several mouths are moving and the crop lands on whoever the model
+# guessed. Reported from a real clip: "la reconnaissance de visage déconne de
+# fou quand y a beaucoup de personnes à l'écran".
+#
+# A wide cut of a crowded shot loses nothing: everyone is in it, nothing
+# moves, and nobody is framed on the wrong face. It is the one case where
+# doing less is strictly better than doing the clever thing badly.
+MAX_FACES_FOR_VERTICAL = 3
+
 # Output canvas. Matches renderer.OUT_W/OUT_H and the ASS PlayRes; kept
 # here so the band arithmetic is readable in one place.
 OUT_W = 1080
@@ -74,6 +89,7 @@ class Framing:
     mode: str                 # "vertical" | "wide"
     face_coverage: float      # fraction of frames with a tracked face
     face_height: float        # median height of the largest face, 0..1
+    crowd: float              # median number of faces on screen at once
     reason: str               # human-readable, recorded in provenance
 
     @property
@@ -89,6 +105,31 @@ def _median(values: list[float]) -> float:
     if len(ordered) % 2:
         return ordered[mid]
     return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def crowding(analysis) -> float:
+    """Median number of faces on screen at the same time.
+
+    Counted per frame across every track, not as "how many people appear at
+    some point": three people who take turns alone are three sequential
+    close-ups and crop beautifully, while three people in shot together
+    cannot be followed by one 9:16 window at all.
+    """
+    frames = getattr(analysis, "frame_count", 0) or 0
+    tracks = getattr(analysis, "tracks", None) or []
+    if not frames or not tracks:
+        return 0.0
+
+    per_frame = [0] * frames
+    for track in tracks:
+        heights = getattr(track, "heights", None) or []
+        for i in range(len(heights)):
+            f = track.start + i
+            if 0 <= f < frames:
+                per_frame[f] += 1
+
+    present = [n for n in per_frame if n]
+    return _median(present) if present else 0.0
 
 
 def measure(analysis) -> tuple[float, float]:
@@ -120,23 +161,30 @@ def measure(analysis) -> tuple[float, float]:
 def decide(analysis, forced: str | None = None) -> Framing:
     """Pick the shape for one clip. `forced` overrides the measurement."""
     coverage, height = measure(analysis)
+    crowd = crowding(analysis)
     if forced in ("vertical", "wide"):
-        return Framing(forced, coverage, height, f"forced by settings ({forced})")
+        return Framing(forced, coverage, height, crowd, f"forced by settings ({forced})")
 
     if coverage < MIN_FACE_COVERAGE:
         return Framing(
-            "wide", coverage, height,
+            "wide", coverage, height, crowd,
             f"faces tracked in only {coverage:.0%} of frames — the subject is "
             "not a person",
         )
+    if crowd >= MAX_FACES_FOR_VERTICAL:
+        return Framing(
+            "wide", coverage, height, crowd,
+            f"{crowd:.0f} faces on screen at once — no single crop can follow "
+            "them, and speaker detection is least reliable here",
+        )
     if height < MIN_FACE_HEIGHT:
         return Framing(
-            "wide", coverage, height,
+            "wide", coverage, height, crowd,
             f"largest face is {height:.0%} of frame height — too small to "
             "carry a vertical crop",
         )
     return Framing(
-        "vertical", coverage, height,
+        "vertical", coverage, height, crowd,
         f"faces in {coverage:.0%} of frames at {height:.0%} of frame height",
     )
 
