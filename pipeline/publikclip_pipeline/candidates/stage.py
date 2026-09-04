@@ -51,12 +51,32 @@ class CandidatesStage(Stage):
             raise StageError("curves.json missing — re-run events.")
         curves = json.loads(curves_path.read_text(encoding="utf-8"))
 
-        ctx.emit(-1, "Detecting scene changes…")
-        try:
-            scene_times = detect_scenes(ingest["media_path"])
-        except Exception:  # noqa: BLE001 — scenes are a minor channel; degrade
-            scene_times = []
-        (ctx.job_dir / "scenes.json").write_text(json.dumps(scene_times), encoding="utf-8")
+        # Scene detection is deterministic and slow — about ten minutes on a
+        # seventy-minute video — and its answer is already on disk from the
+        # last run of this stage. The media in a job directory does not
+        # change, so re-deriving it costs ten minutes to reach the same list.
+        #
+        # An empty list is NOT reused: that is what a failed detection also
+        # writes, and caching a failure would disable the channel for the
+        # life of the job with nothing to say why.
+        scenes_path = ctx.job_dir / "scenes.json"
+        scene_times: list[float] = []
+        if scenes_path.exists():
+            try:
+                cached = json.loads(scenes_path.read_text(encoding="utf-8"))
+                if isinstance(cached, list) and cached:
+                    scene_times = [float(t) for t in cached]
+                    ctx.emit(-1, f"Scene changes: {len(scene_times)} (cached)")
+            except (json.JSONDecodeError, TypeError, ValueError):
+                scene_times = []
+
+        if not scene_times:
+            ctx.emit(-1, "Detecting scene changes…")
+            try:
+                scene_times = detect_scenes(ingest["media_path"])
+            except Exception:  # noqa: BLE001 — scenes are a minor channel; degrade
+                scene_times = []
+            scenes_path.write_text(json.dumps(scene_times), encoding="utf-8")
 
         ctx.emit(0.6, "Building interest curve…")
         channels = {
