@@ -78,6 +78,9 @@ class SelectedClip:
     # The clip's own words, kept so an unattended run can judge what it is
     # about before publishing it. See autopilot.review.
     transcript: str = ""
+    # Cut to bounds an operator named. It reaches the post whatever it
+    # scores, for the same reason it reached the render.
+    dictated: bool = False
 
     def caption(self, limit: int = 180) -> str:
         """What the post should say, best available first.
@@ -128,12 +131,19 @@ def select(
     take: int = 3,
     min_score: float = DEFAULT_MIN_SCORE,
     max_duration: float | None = DEFAULT_MAX_DURATION,
+    only: list[int] | None = None,
 ) -> list[SelectedClip]:
     """The best `take` rendered clips that clear the floor, best first.
 
     Reads the job's artifacts rather than taking them as arguments — the
     artifacts are the source of truth in this pipeline, and a resumed job
     should select identically to a fresh one.
+
+    `only` names exact clips and overrides every filter: the caller has
+    already decided. A clip the operator dictated with --cut is likewise
+    exempt from the floor and the `take` cut — it exists because somebody
+    watched the video and asked for it, and ranking that on merit is the
+    same mistake the candidate stage and the scorer each made first.
     """
     if 0 < min_score < _SUSPICIOUS_SCALE:
         raise ValueError(
@@ -154,13 +164,18 @@ def select(
         path = Path(output["path"])
         if not path.exists():
             continue  # rendered then moved or cleaned up
-        if output.get("score") is None or output["score"] < min_score:
+        index = output.get("clip", 0)
+        meta = scored_clips[index] if 0 <= index < len(scored_clips) else {}
+        named = only is not None and index in only
+        dictated = bool(meta.get("dictated"))
+        if only is not None and not named:
             continue
+        if not (named or dictated):
+            if output.get("score") is None or output["score"] < min_score:
+                continue
         duration = output.get("duration") or 0.0
         if max_duration is not None and duration > max_duration:
             continue
-        index = output.get("clip", 0)
-        meta = scored_clips[index] if 0 <= index < len(scored_clips) else {}
         chosen.append(
             SelectedClip(
                 job_id=job_id,
@@ -175,8 +190,16 @@ def select(
                 description=output.get("description") or "",
                 hashtags=tuple(output.get("hashtags") or ()),
                 transcript=output.get("transcript") or "",
+                dictated=dictated,
             )
         )
 
-    chosen.sort(key=lambda c: c.score, reverse=True)
-    return chosen[:take]
+    if only is not None:
+        # The caller listed them; the order they asked for is the order.
+        rank = {c: i for i, c in enumerate(only)}
+        chosen.sort(key=lambda c: rank.get(c.clip, len(rank)))
+        return chosen
+
+    chosen.sort(key=lambda c: (c.dictated, c.score), reverse=True)
+    kept = [c for c in chosen if c.dictated]
+    return kept + [c for c in chosen if not c.dictated][: max(0, take - len(kept))]

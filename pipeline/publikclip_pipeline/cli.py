@@ -308,8 +308,16 @@ def cmd_publish(args: argparse.Namespace) -> int:
         print(str(err), file=sys.stderr)
         return 1
 
+    only = None
+    if getattr(args, "only", None):
+        try:
+            only = [int(n) for n in args.only.replace(" ", "").split(",") if n]
+        except ValueError:
+            print(f"--only wants clip numbers, got {args.only!r}", file=sys.stderr)
+            return 1
     picked = select(
-        args.job_id, job_dir, take=args.clips, min_score=args.min_score
+        args.job_id, job_dir, take=args.clips, min_score=args.min_score,
+        only=only
     )
     if not picked:
         print(
@@ -790,6 +798,11 @@ def main(argv: list[str] | None = None) -> int:
     p_pub.add_argument(
         "--publish", choices=["dry-run", "zernio", "composio", "postiz"],
         default="dry-run",
+    )
+    p_pub.add_argument(
+        "--only", metavar="N,N,...",
+        help="post exactly these clip numbers, in this order, ignoring the "
+             "score floor and --clips",
     )
     p_pub.add_argument(
         "--stagger", type=int, default=0, metavar="MINUTES",
