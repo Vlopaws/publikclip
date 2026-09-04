@@ -425,3 +425,34 @@ def test_two_different_clips_are_both_uploaded(monkeypatch, tmp_path):
     pub.publish(first, "tiktok")
     pub.publish(second, "tiktok")
     assert len(fake.uploaded) == 2
+
+
+def test_tiktok_privacy_is_read_from_the_shape_the_api_returns(monkeypatch):
+    """Verbatim from the live endpoint for the operator's account.
+
+    Two field-name mistakes hid here and both failed identically — an empty
+    list, which the caller reads as "no information" and posts anyway. The
+    key is `privacyLevels`, and its entries are objects with a `value`.
+    """
+    real = [
+        {"value": "PUBLIC_TO_EVERYONE", "label": "Public To Everyone"},
+        {"value": "MUTUAL_FOLLOW_FRIENDS", "label": "Mutual Follow Friends"},
+        {"value": "SELF_ONLY", "label": "Self Only"},
+    ]
+    Fake(tiktok_options=real).install(monkeypatch)
+    got = zernio.ZernioPublisher().tiktok_privacy_options("acc_tt")
+    assert got == ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"]
+
+
+def test_bare_strings_are_still_accepted(monkeypatch):
+    Fake(tiktok_options=["SELF_ONLY"]).install(monkeypatch)
+    assert zernio.ZernioPublisher().tiktok_privacy_options("acc_tt") == ["SELF_ONLY"]
+
+
+def test_an_account_limited_to_self_only_refuses_a_public_post(monkeypatch, tmp_path):
+    """An unaudited TikTok app is capped at SELF_ONLY. Sending
+    PUBLIC_TO_EVERYONE anyway would be refused by TikTok after the upload."""
+    Fake(tiktok_options=[{"value": "SELF_ONLY", "label": "Self Only"}]).install(monkeypatch)
+    result = zernio.ZernioPublisher(visibility="public").publish(a_clip(tmp_path), "tiktok")
+    assert not result.ok
+    assert "SELF_ONLY" in result.error

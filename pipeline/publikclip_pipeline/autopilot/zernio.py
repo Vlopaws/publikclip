@@ -240,21 +240,41 @@ class ZernioPublisher:
         The valid values come from TikTok's creator info for the account,
         not from a constant — an unaudited app, for instance, may only be
         permitted SELF_ONLY.
+
+        Verified against the live endpoint, which answers:
+
+            {"creator": {...},
+             "privacyLevels": [{"value": "PUBLIC_TO_EVERYONE", "label": ...},
+                               {"value": "SELF_ONLY", "label": ...}], ...}
+
+        Two things this got wrong before, and both failed the same quiet way
+        — an empty list, which the caller treats as "no information" and
+        posts anyway. The field is `privacyLevels`, not
+        `privacyLevelOptions`; and its entries are objects carrying a
+        `value`, not bare strings.
         """
         try:
             payload = self._get(f"/accounts/{account_id}/tiktok/creator-info")
         except PublishError:
             return []
-        for key in ("privacyLevelOptions", "privacy_level_options", "options"):
-            found = payload.get(key)
-            if isinstance(found, list):
-                return [str(v) for v in found]
-        info = payload.get("creatorInfo") or payload.get("data") or {}
-        if isinstance(info, dict):
-            for key in ("privacyLevelOptions", "privacy_level_options"):
-                found = info.get(key)
-                if isinstance(found, list):
-                    return [str(v) for v in found]
+
+        for container in (payload, payload.get("creatorInfo"), payload.get("data")):
+            if not isinstance(container, dict):
+                continue
+            for key in (
+                "privacyLevels", "privacyLevelOptions", "privacy_level_options",
+                "options",
+            ):
+                found = container.get(key)
+                if not isinstance(found, list):
+                    continue
+                values = [
+                    str(v.get("value")) if isinstance(v, dict) else str(v)
+                    for v in found
+                ]
+                values = [v for v in values if v and v != "None"]
+                if values:
+                    return values
         return []
 
     # --- media -----------------------------------------------------------

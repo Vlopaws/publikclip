@@ -69,11 +69,39 @@ finish() {
 }
 trap finish EXIT
 
-if [ -e "$PAUSE" ]; then
-  # Deliberately before anything else, and it must not power off: this flag
-  # exists so a person can work on the machine without it vanishing.
+# Two ways to say "not this boot", and the second one is the important one.
+#
+# The on-disk flag can only be set by someone already on the machine, and
+# getting on the machine means starting it — which starts this. Setting the
+# flag after boot loses the race: measured, a manual start ran a full burst
+# and powered off before the SSH session could touch anything, which made
+# the box impossible to work on.
+#
+# Instance metadata can be set while the machine is off. That is the way in:
+#
+#   gcloud compute instances add-metadata publikclip \
+#     --zone ... --metadata publikclip-burst=off
+#
+# Read from the metadata server, which needs no credentials and no network
+# beyond the host itself.
+metadata_says_off() {
+  local value
+  value=$(curl -fsS --max-time 5 \
+    -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/publikclip-burst" \
+    2>/dev/null) || return 1
+  [ "$value" = "off" ] || [ "$value" = "false" ] || [ "$value" = "0" ]
+}
+
+if [ -e "$PAUSE" ] || metadata_says_off; then
+  # Must not power off: these flags exist so a person can work on the
+  # machine without it vanishing underneath them.
   POWEROFF=0
-  say "paused by $PAUSE — doing nothing"
+  if [ -e "$PAUSE" ]; then
+    say "paused by $PAUSE — doing nothing"
+  else
+    say "paused by instance metadata publikclip-burst=off — doing nothing"
+  fi
   exit 0
 fi
 
