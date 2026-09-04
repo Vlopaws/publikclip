@@ -276,6 +276,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
     """
     from . import autopilot
     from .autopilot import publish as publish_mod
+    from .autopilot import review
     from .autopilot.select import select
 
     job = queue.get_job(args.job_id)
@@ -307,7 +308,21 @@ def cmd_publish(args: argparse.Namespace) -> int:
         return 0
 
     results = []
+    held = []
     for clip in picked:
+        # The same judge the autopilot uses. It lived only in the unattended
+        # path, so publishing a job by hand skipped it entirely — and the
+        # two clips it exists to stop were the two highest-scored in the
+        # video, which is exactly what --clips 6 would have taken first.
+        verdict = review.check(clip.transcript, clip.title, clip.description)
+        if not verdict.ok:
+            held.append({"clip": clip.clip, "score": clip.score, **verdict.to_json()})
+            print(
+                f"  HELD clip {clip.clip} ({', '.join(verdict.reasons)}) — "
+                "rendered, not posted",
+                file=sys.stderr,
+            )
+            continue
         for platform in platforms:
             if publish_mod.already_posted(clip, platform):
                 print(f"  clip {clip.clip} already on {platform}", file=sys.stderr)
@@ -329,6 +344,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         "job_id": args.job_id,
         "selected": [c.to_json() for c in picked],
         "published": [r.to_json() for r in results],
+        "held": held,
         "failures": sum(1 for r in results if not r.ok),
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
