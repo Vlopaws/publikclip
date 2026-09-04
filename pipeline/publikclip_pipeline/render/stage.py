@@ -25,6 +25,7 @@ class RenderStage(Stage):
         from ..captions import ass as ass_mod
         from ..scoring import llm as llm_mod
         from ..scoring import rubric
+        from ..sources import naming
         from . import ffmpeg_bin, renderer
 
         if not ffmpeg_bin.supports_captions():
@@ -104,17 +105,41 @@ class RenderStage(Stage):
             band = tuple(band) if band else None
 
             copy = {}
+            spoken = " ".join(w.text for w in words)
+            # Who the page says is in the video, narrowed to who this clip's
+            # own words name. The second list is what a title may claim.
+            cast = list(ingest.get("cast") or [])
+            named = naming.mentioned_in(spoken, cast)
             if headline_client is not None and band:
-                spoken = " ".join(w.text for w in words)
                 try:
                     copy = headline_client.generate_json(
-                        rubric.headline_prompt(spoken, {"duration": end - start}),
+                        rubric.headline_prompt(
+                            spoken,
+                            {
+                                "duration": end - start,
+                                "cast": cast,
+                                "named": named,
+                            },
+                        ),
                         rubric.HEADLINE_SCHEMA,
                     )
                 except Exception as err:  # noqa: BLE001 — copy is optional
                     ctx.emit(-1, f"clip {i + 1}: no title ({err})")
 
             title = (copy.get("title") or "").strip() or None
+            if title and cast:
+                # The prompt forbids guessing; this checks it was obeyed.
+                # A title naming the wrong cast member is a false statement
+                # about a real person, published — so it is dropped rather
+                # than shipped, and the clip goes out without a headline.
+                kept = naming.strip_unsupported(title, named, cast)
+                if not kept:
+                    ctx.emit(
+                        -1,
+                        f"clip {i + 1}: title dropped, it named someone this "
+                        "clip does not",
+                    )
+                title = kept or None
             ass_path = out_dir / f"clip_{i:02d}.ass"
             ass_path.write_text(
                 ass_mod.build_ass(
@@ -156,6 +181,8 @@ class RenderStage(Stage):
                     "event_tags": len(clip_events),
                     "mode": mode,
                     "title": title,
+                    "cast": cast,
+                    "named": named,
                     "description": (copy.get("description") or "").strip() or None,
                     "hashtags": copy.get("hashtags") or [],
                 }

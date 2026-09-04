@@ -314,6 +314,15 @@ HEADLINE_SCHEMA: dict[str, Any] = {
 }
 
 
+# One emoji, at the end, and only from this set. Left open, a model reaches
+# for whatever matches the topic — a coffin for a clip about a death in a
+# game show — and the result reads as a report of a real event. These are
+# reaction marks: they say "look at this", not "this happened".
+TITLE_EMOJI = ("\U0001F631", "\U0001F62D", "\U0001F525", "\U0001F480",
+               "\U0001F633", "\U0001F92F", "\U0001F602", "\u26A1",
+               "\U0001F3AF", "\U0001F440")
+
+
 def headline_prompt(transcript_text: str, context: dict) -> str:
     """Copy for one finalist clip: on-screen title, description, tags.
 
@@ -321,18 +330,41 @@ def headline_prompt(transcript_text: str, context: dict) -> str:
     title reads as machine output, and the audience it is aimed at is the
     one that speaks the language being spoken.
     """
+    cast = context.get("cast") or []
+    named = context.get("named") or []
+    who = ""
+    if cast:
+        who = (
+            "People in this video: " + ", ".join(cast) + ".\n"
+            + (
+                "Named or addressed in THIS clip: " + ", ".join(named) + ".\n"
+                if named
+                else "Nobody is named in this clip's words.\n"
+            )
+            + "If the transcript makes it obvious which of them does the "
+            "thing the clip is about, START the title with that person's "
+            "name. If it does not, or if you would be guessing, use no name "
+            "at all — never attribute an action to someone the clip does not "
+            "clearly identify. These are real people and this is published "
+            "publicly.\n\n"
+        )
     return (
         "You write the on-screen title and description for a short-form clip.\n\n"
         f"{llm.FENCE_NOTICE}\n\n"
         f"Clip transcript ({context.get('duration', 0):.0f} seconds):\n"
         f"{llm.fenced('transcript', transcript_text)}\n\n"
+        f"{who}"
         "Write in the SAME LANGUAGE as the transcript.\n\n"
         f"title: the hook burned onto the video. Hard limit {TITLE_MAX_CHARS} "
         "characters — it has to fit two short lines on a phone. Concrete and "
         "specific to what is actually said. State the surprising thing rather "
         "than promising one: 'Microsoft equips 90% of schools' beats 'You "
-        "won't believe what schools use'. No clickbait formulas, no emoji, no "
-        "hashtags, no ALL CAPS, no trailing punctuation.\n"
+        "won't believe what schools use'. No clickbait formulas, no hashtags, "
+        "no ALL CAPS, no trailing punctuation.\n"
+        "Finish the title with exactly ONE emoji, chosen from this list and "
+        f"nowhere else: {' '.join(TITLE_EMOJI)}. It is a reaction mark, not a "
+        "depiction — never one that would make a staged moment read as a real "
+        "event.\n"
         "description: 2-3 sentences for the post caption. First sentence "
         "carries the searchable terms a person would actually type.\n"
         "hashtags: 3-6 lowercase tags, no '#', specific over generic."

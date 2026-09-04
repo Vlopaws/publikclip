@@ -48,10 +48,22 @@ class IngestStage(Stage):
 
         heatmap = None
         title = None
+        cast: list[str] = []
         if job.source_type == "url":
             meta = ytdlp.fetch_meta(job.source, prog)
             heatmap = meta.heatmap
             title = meta.title
+            # Who is on camera, from the page. The copy written later can
+            # then say "Maxime Biaggi joue à la roulette russe" instead of
+            # "a bar patron suggests Russian roulette" — the name is in the
+            # title and the description and simply never reached it.
+            from ..sources import naming
+
+            cast = naming.cast(
+                title=meta.title,
+                description=str(meta.raw.get("description") or ""),
+                uploader=str(meta.raw.get("uploader") or meta.raw.get("channel") or ""),
+            )
             media_path = ctx.job_dir / "media.mp4"
             if not media_path.exists():
                 ytdlp.download(job.source, media_path, prog)
@@ -95,6 +107,7 @@ class IngestStage(Stage):
             "media_path": str(media_path),
             "audio_path": str(audio_path),
             "title": title,
+            "cast": cast,
             "probe": info.to_json(),
             "heatmap": heatmap,
             "source_hash": source_hash,
