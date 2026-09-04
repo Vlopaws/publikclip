@@ -339,3 +339,53 @@ def test_a_crowded_wide_cut_is_still_a_tripod():
     source = inspect.getsource(director.build_trajectory)
     assert "wide = mode == \"wide\"" in source
     assert "and not wide" in source
+
+
+# --- a vertical clip that had nowhere to put its title -------------------
+#
+# The band was only ever looked for above the highest face. A 9:16 crop that
+# follows a face puts it high in frame by construction, so the rule rejected
+# five vertical clips out of seven and they shipped with no headline at all:
+# a rule meant to keep a title off a face was deciding there would be no
+# title. The numbers below are the ones those clips measured.
+
+def test_no_headroom_falls_back_under_the_chin():
+    """Clip 8: face from 7.7% to 50.7% of the frame."""
+    band = framing.title_band("vertical", 0.077, 0.507)
+    assert band is not None
+    assert band[0] > 0.507 * framing.OUT_H, "the title would sit on the face"
+    assert band[1] <= framing.OUT_H
+
+
+def test_headroom_is_still_preferred_when_it_exists():
+    """Clip 1: 15.7% down leaves room above, and a title belongs at the top."""
+    assert framing.title_band("vertical", 0.157, 0.666) == (40, 261)
+
+
+def test_a_face_filling_the_frame_still_gets_no_title():
+    """Clip 7: 2.5% to 99.3%. There is no free band, and inventing one puts
+    a headline across someone's face."""
+    assert framing.title_band("vertical", 0.025, 0.993) is None
+
+
+def test_a_chin_low_in_frame_leaves_too_little():
+    """Clip 16: 92.4% down — 106 pixels, under the minimum."""
+    assert framing.title_band("vertical", 0.064, 0.924) is None
+
+
+def test_the_band_under_the_chin_clears_the_minimum():
+    """Clip 2: 87.0% down leaves 170 pixels, which is a band."""
+    band = framing.title_band("vertical", 0.101, 0.870)
+    assert band is not None
+    assert band[1] - band[0] >= framing.MIN_TITLE_BAND
+
+
+def test_without_a_chin_measurement_nothing_changes():
+    """Older trajectories carry no face_bottom; they must not crash or
+    suddenly grow a band."""
+    assert framing.title_band("vertical", 0.077) is None
+
+
+def test_wide_mode_ignores_the_chin_entirely():
+    """A wide clip's band is the letterbox bar; faces are in the picture."""
+    assert framing.title_band("wide", 0.05, 0.99) == framing.title_band("wide", None)

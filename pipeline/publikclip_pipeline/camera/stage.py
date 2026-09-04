@@ -87,7 +87,10 @@ class CameraStage(Stage):
             face_top = framing_mod.highest_face_in_output(
                 analysis, traj.frames, src_h, until_frame=hold
             )
-            band = framing_mod.title_band(shape.mode, face_top)
+            face_bottom = framing_mod.lowest_face_in_output(
+                analysis, traj.frames, src_h, until_frame=hold
+            )
+            band = framing_mod.title_band(shape.mode, face_top, face_bottom)
             out_path = ctx.job_dir / f"trajectory_{i:02d}.json"
             out_path.write_text(
                 json.dumps(
@@ -107,6 +110,12 @@ class CameraStage(Stage):
                             "reason": shape.reason,
                             "picture_box": list(framing_mod.picture_box(shape.mode)),
                             "title_band": list(band) if band else None,
+                            # The two numbers the band was decided from.
+                            # Without them a later question about why a clip
+                            # has no headline cannot be answered from the
+                            # artifacts, which is what the artifacts are for.
+                            "face_top": face_top,
+                            "face_bottom": face_bottom,
                         },
                     }
                 )

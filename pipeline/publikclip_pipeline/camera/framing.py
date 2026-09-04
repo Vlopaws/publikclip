@@ -250,7 +250,44 @@ def highest_face_in_output(
     return lowest
 
 
-def title_band(mode: str, face_top: float | None) -> tuple[int, int] | None:
+def lowest_face_in_output(
+    analysis, frames: list, src_h: int, until_frame: int | None = None
+) -> float | None:
+    """Bottom edge of the lowest face ever framed, as a fraction of output
+    height -- the mirror of highest_face_in_output, and read the same way.
+
+    The maximum is taken for the same reason the other takes the minimum: a
+    title over someone's chin for half a second is still over their chin.
+    """
+    tracks = getattr(analysis, "tracks", None) or []
+    if not tracks or not frames:
+        return None
+
+    limit = len(frames) if until_frame is None else min(until_frame, len(frames))
+    deepest: float | None = None
+    for track in tracks:
+        tops = getattr(track, "tops", None) or []
+        heights = getattr(track, "heights", None) or []
+        for i, top in enumerate(tops):
+            f = track.start + i
+            if not (0 <= f < limit) or i >= len(heights):
+                continue
+            _, crop_y, _, crop_h = frames[f]
+            if crop_h <= 0:
+                continue
+            out = ((top + heights[i]) * src_h - crop_y) / crop_h
+            if out < 0.0 or out > 1.0:
+                continue  # below the crop; not on screen
+            if deepest is None or out > deepest:
+                deepest = out
+    return deepest
+
+
+def title_band(
+    mode: str,
+    face_top: float | None,
+    face_bottom: float | None = None,
+) -> tuple[int, int] | None:
     """The vertical span, in output pixels, where a title may be drawn.
 
     Wide mode has a real empty bar, so the title goes there and touches
@@ -267,6 +304,18 @@ def title_band(mode: str, face_top: float | None) -> tuple[int, int] | None:
     if face_top is None:
         # No face was ever framed; nothing to avoid, so use the top eighth.
         return TITLE_EDGE_MARGIN, OUT_H // 8
+
     ceiling = int(face_top * OUT_H) - TITLE_EDGE_MARGIN
-    top = TITLE_EDGE_MARGIN
-    return (top, ceiling) if ceiling - top >= MIN_TITLE_BAND else None
+    if ceiling - TITLE_EDGE_MARGIN >= MIN_TITLE_BAND:
+        return TITLE_EDGE_MARGIN, ceiling
+
+    # Nothing above. A 9:16 crop that follows a face puts it high in frame
+    # by construction, so demanding headroom rejected five vertical clips
+    # out of seven and shipped them with no headline at all -- the rule
+    # meant to keep a title off a face was deciding there would be no
+    # title. Below the chin is where the format puts its text anyway.
+    if face_bottom is not None:
+        floor = int(face_bottom * OUT_H) + TITLE_EDGE_MARGIN
+        if OUT_H - TITLE_EDGE_MARGIN - floor >= MIN_TITLE_BAND:
+            return floor, OUT_H - TITLE_EDGE_MARGIN
+    return None
