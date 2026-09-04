@@ -159,7 +159,9 @@ def picture_box(mode: str) -> tuple[int, int, int, int]:
     return 0, (OUT_H - h) // 2, OUT_W, h
 
 
-def highest_face_in_output(analysis, frames: list, src_h: int) -> float | None:
+def highest_face_in_output(
+    analysis, frames: list, src_h: int, until_frame: int | None = None
+) -> float | None:
     """Top edge of the highest face ever framed, as a fraction of output
     height — or None if no face is framed at all.
 
@@ -169,17 +171,25 @@ def highest_face_in_output(analysis, frames: list, src_h: int) -> float | None:
     because the number exists to keep a title off a face, and a title drawn
     over someone's eyes for half a second is still a title drawn over
     someone's eyes.
+
+    `until_frame` bounds it to the frames the title is actually visible
+    for. Measured over a whole clip the rule rejected 7 vertical clips out
+    of 7 — one moment anywhere in forty seconds where somebody leans up
+    killed the headline for the entire clip, including the thirty-six
+    seconds after it had already gone. A minimum over frames nobody is
+    looking at is not caution, it is a wrong question.
     """
     tracks = getattr(analysis, "tracks", None) or []
     if not tracks or not frames:
         return None
 
+    limit = len(frames) if until_frame is None else min(until_frame, len(frames))
     lowest: float | None = None
     for track in tracks:
         tops = getattr(track, "tops", None) or []
         for i, top in enumerate(tops):
             f = track.start + i
-            if not (0 <= f < len(frames)):
+            if not (0 <= f < limit):
                 continue
             _, crop_y, _, crop_h = frames[f]
             if crop_h <= 0:

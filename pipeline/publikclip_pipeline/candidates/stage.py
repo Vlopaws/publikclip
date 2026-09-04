@@ -73,7 +73,11 @@ class CandidatesStage(Stage):
         curve, effective_weights = curve_mod.interest_curve(channels)
 
         ctx.emit(0.8, "Extracting candidate windows…")
-        candidates = windows_mod.extract(curve, channels, segments, duration)
+        candidates = windows_mod.extract(
+            curve, channels, segments, duration,
+            focus=[tuple(s) for s in (getattr(ctx.settings, "focus", None) or [])],
+            scene_times=scene_times,
+        )
         if not candidates:
             raise StageError(
                 "No candidate moments found — the video may be too short or too quiet."

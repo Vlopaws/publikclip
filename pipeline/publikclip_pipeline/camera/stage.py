@@ -27,6 +27,7 @@ class CameraStage(Stage):
         from . import asd as asd_mod
         from . import director
         from . import framing as framing_mod
+        from ..captions import ass as ass_mod
         from .detect import FaceDetector
 
         prior = ctx.prior or {}
@@ -74,7 +75,18 @@ class CameraStage(Stage):
                 analysis, clip_turns, timeline, dynamics, grid,
                 start, end, src_w, src_h, ctx.settings, mode=shape.mode,
             )
-            face_top = framing_mod.highest_face_in_output(analysis, traj.frames, src_h)
+            # A vertical title is a hook: up for the first few seconds and
+            # gone. Only the faces on screen during those seconds can be
+            # sat on, so only those decide where it may go. A wide clip's
+            # band is the letterbox bar and holds for the whole clip.
+            hold = (
+                len(traj.frames)
+                if shape.mode == "wide"
+                else int(ass_mod.TITLE_HOLD_SEC * traj.fps)
+            )
+            face_top = framing_mod.highest_face_in_output(
+                analysis, traj.frames, src_h, until_frame=hold
+            )
             band = framing_mod.title_band(shape.mode, face_top)
             out_path = ctx.job_dir / f"trajectory_{i:02d}.json"
             out_path.write_text(

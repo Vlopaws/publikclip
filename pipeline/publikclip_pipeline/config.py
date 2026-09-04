@@ -138,6 +138,11 @@ class Settings:
     # will look through the lot; the autopilot lowers it to what it can
     # actually use.
     max_finalists: int | None = None
+    # Regions the operator wants cut whatever the interest curve thinks,
+    # as [[start_sec, end_sec], ...]. The curve ranks the whole video, so a
+    # stretch that is quiet but good never reaches the cut — see
+    # candidates.windows.focus_peaks for the measurement that motivated it.
+    focus: list = field(default_factory=list)
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     # Defaults to the backend that cannot generate a bill. Every hosted

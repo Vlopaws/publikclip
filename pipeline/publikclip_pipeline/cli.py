@@ -53,16 +53,62 @@ def _emit_result(jsonl: bool, payload: dict) -> None:
         print(json.dumps(payload, indent=2))
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    source = args.source
-    source_type = "url" if source.startswith(("http://", "https://")) else "file"
-    settings = config.Settings()
+def _timecode(text: str) -> float:
+    """Seconds from "90", "1:30" or "1:02:03"."""
+    parts = [float(p) for p in text.strip().split(":")]
+    seconds = 0.0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds
+
+
+def parse_focus(values: list[str] | None) -> list[list[float]]:
+    """"25:00-36:00" -> [[1500.0, 2160.0]].
+
+    Regions the operator wants cut whatever the interest curve thinks. The
+    curve ranks the whole video and takes the top of that ranking, so a
+    stretch that is quiet but good yields nothing rather than something
+    mediocre.
+    """
+    spans: list[list[float]] = []
+    for value in values or []:
+        for chunk in value.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if "-" not in chunk:
+                raise SystemExit(f"--focus wants START-END, got {chunk!r}")
+            start_text, end_text = chunk.split("-", 1)
+            try:
+                start, end = _timecode(start_text), _timecode(end_text)
+            except ValueError:
+                raise SystemExit(f"--focus could not read {chunk!r}") from None
+            if end <= start:
+                raise SystemExit(f"--focus range ends before it starts: {chunk!r}")
+            spans.append([start, end])
+    return spans
+
+
+def _apply_common(settings, args) -> None:
+    """Flags shared by run and resume."""
     if args.llm:
         settings.llm_mode = args.llm
     if args.captions:
         settings.caption_preset = args.captions
     if args.camera:
         settings.camera.speaker_change = args.camera
+    focus = parse_focus(getattr(args, "focus", None))
+    if focus:
+        settings.focus = focus
+    if getattr(args, "max_clips", None):
+        settings.max_finalists = args.max_clips
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    source = args.source
+    source_type = "url" if source.startswith(("http://", "https://")) else "file"
+    settings = config.Settings()
+    _apply_common(settings, args)
     job = queue.create_job(source_type, source, json.dumps(settings.to_json()))
     return _execute(job, args.jsonl)
 
@@ -72,14 +118,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if job is None:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
-    if args.llm or args.captions or args.camera:
+    if args.llm or args.captions or args.camera or args.focus or args.max_clips:
         settings = config.Settings.from_json(json.loads(job.settings_json))
-        if args.llm:
-            settings.llm_mode = args.llm
-        if args.captions:
-            settings.caption_preset = args.captions
-        if args.camera:
-            settings.camera.speaker_change = args.camera
+        _apply_common(settings, args)
         new_json = json.dumps(settings.to_json())
         with queue._connect() as conn:  # noqa: SLF001 — CLI is a queue friend
             conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (new_json, job.id))
@@ -606,6 +647,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--llm", choices=llm_mod.available_modes(), default=None)
     p_run.add_argument("--captions", default=None, help="caption preset name")
     p_run.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
+    p_run.add_argument(
+        "--focus", action="append", metavar="START-END",
+        help="cut this region whatever the interest curve thinks, e.g. 25:00-36:00 "
+             "(repeatable, comma-separated accepted)",
+    )
+    p_run.add_argument(
+        "--max-clips", type=int, default=None,
+        help="how many scored moments reach camera and render (default 12)",
+    )
     p_run.set_defaults(fn=cmd_run)
 
     p_resume = sub.add_parser("resume", help="resume a job from its checkpoints")
@@ -613,6 +663,15 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.add_argument("--llm", choices=llm_mod.available_modes(), default=None)
     p_resume.add_argument("--captions", default=None, help="caption preset name")
     p_resume.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
+    p_resume.add_argument(
+        "--focus", action="append", metavar="START-END",
+        help="cut this region whatever the interest curve thinks, e.g. 25:00-36:00 "
+             "(repeatable, comma-separated accepted)",
+    )
+    p_resume.add_argument(
+        "--max-clips", type=int, default=None,
+        help="how many scored moments reach camera and render (default 12)",
+    )
     p_resume.set_defaults(fn=cmd_resume)
 
     p_jobs = sub.add_parser("jobs", help="list jobs")
