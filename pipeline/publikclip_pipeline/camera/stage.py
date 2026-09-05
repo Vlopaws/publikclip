@@ -90,7 +90,10 @@ class CameraStage(Stage):
             face_bottom = framing_mod.lowest_face_in_output(
                 analysis, traj.frames, src_h, until_frame=hold
             )
-            band = framing_mod.title_band(shape.mode, face_top, face_bottom)
+            band = framing_mod.title_band(
+                shape.mode, face_top, face_bottom,
+                caption_zone=ass_mod.caption_zone(ctx.settings.caption_preset),
+            )
             out_path = ctx.job_dir / f"trajectory_{i:02d}.json"
             out_path.write_text(
                 json.dumps(

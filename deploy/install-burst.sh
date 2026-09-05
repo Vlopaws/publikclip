@@ -13,6 +13,12 @@
 #      because it was counted.
 #   2. A `shutdown` armed from the boot itself, as a backstop for the case
 #      where the service never starts or systemd itself is unhappy.
+#   3. A timer that asks every few minutes whether anything justifies this
+#      machine being on — a running burst, or an unexpired lease — and
+#      powers it off when nothing does. This is the only one that does not
+#      depend on a burst having started, a trap having fired, or a
+#      `shutdown` alarm surviving; a `shutdown -c` cancels the backstop for
+#      good, and after that nothing else was watching at all.
 #
 # Both are now armed unconditionally. Previously both, plus burst.sh's own
 # power-off, were gated on one file — so they were not independent at all,
@@ -28,8 +34,13 @@ APP=/opt/publikclip
 # that a wedged burst costs an hour and a half, not a day.
 BUDGET_SEC=${BUDGET_SEC:-5400}
 BACKSTOP_MIN=${BACKSTOP_MIN:-100}
+# How often to ask whether this machine is still needed. The backstop is a
+# single alarm that a `shutdown -c` cancels for good; this keeps asking, so
+# nothing has to remember to re-arm anything.
+REAP_EVERY_MIN=${REAP_EVERY_MIN:-5}
 
 install -o root -g root -m 755 "$APP/src/deploy/burst.sh" /usr/local/bin/publikclip-burst
+install -o root -g root -m 755 "$APP/src/deploy/reaper.sh" /usr/local/bin/publikclip-reaper
 
 # Settings live outside the unit so they can be changed without editing
 # systemd or the repo — and so a change survives the next reinstall.
@@ -94,13 +105,37 @@ ExecStop=/sbin/shutdown -c
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/publikclip-reaper.service <<UNIT
+[Unit]
+Description=publikclip: power off a machine with no reason to be on
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/publikclip-reaper
+UNIT
+
+cat > /etc/systemd/system/publikclip-reaper.timer <<UNIT
+[Unit]
+Description=publikclip: ask every few minutes whether this machine is needed
+
+[Timer]
+OnBootSec=${REAP_EVERY_MIN}min
+OnUnitActiveSec=${REAP_EVERY_MIN}min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 systemctl enable publikclip-burst.service publikclip-backstop.service
+systemctl enable --now publikclip-reaper.timer
 
 echo "installed."
 echo "  settings     : ${APP}/burst.env"
 echo "  burst budget : ${BUDGET_SEC}s"
 echo "  backstop     : shutdown +${BACKSTOP_MIN}min from boot"
+echo "  reaper       : every ${REAP_EVERY_MIN}min, powers off with no burst and no lease"
 echo
 echo "do no work this boot :  sudo touch ${APP}/no-burst      (still powers off)"
 echo "keep it up 60 min    :  sudo sh -c 'date -d \"+60 min\" +%s > ${APP}/keep-up-until' && sudo shutdown -c"

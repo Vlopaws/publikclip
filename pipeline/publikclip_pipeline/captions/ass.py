@@ -40,6 +40,24 @@ EMPHASIS_RMS_QUANTILE = 0.85
 # drawn at all, which is the correct outcome for a clip framed so tightly
 # that any title would sit on someone's face.
 TITLE_MAX_LINES = 2
+
+# Where the captions live, so a title can be kept out of it.
+#
+# Captions are bottom-anchored with margin_v of clear space beneath them and
+# a chunk of up to CHUNK_MAX_WORDS wraps to at most two lines at this width.
+# Published here rather than recomputed by the caller: the geometry is this
+# module's, and the first title placed under a chin landed straight on top
+# of the captions because the band knew about faces and nothing else.
+CAPTION_MAX_LINES = 2
+CAPTION_LINE_FACTOR = 1.25
+
+
+def caption_zone(preset_name: str = "classic") -> tuple[int, int]:
+    """(top, bottom) in output pixels that captions may occupy."""
+    preset = PRESETS.get(preset_name, PRESETS["classic"])
+    bottom = PLAY_RES_Y - preset.margin_v
+    top = bottom - int(CAPTION_MAX_LINES * preset.size * CAPTION_LINE_FACTOR)
+    return top, bottom
 TITLE_SIZE = 96
 TITLE_MIN_SIZE = 58
 

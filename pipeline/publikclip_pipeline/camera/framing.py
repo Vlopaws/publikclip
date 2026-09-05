@@ -81,6 +81,16 @@ TITLE_EDGE_MARGIN = 40
 # title is better dropped than crushed.
 MIN_TITLE_BAND = 150
 
+# ...and how much a title under the chin needs, which is more.
+#
+# A band is only worth using if what fits in it reads as a headline. At the
+# 150px floor a bottom band produced two lines of roughly 68px on a 1080
+# frame -- caption-sized, sitting on the bottom edge, reading as a watermark
+# rather than the thing that stops a scroll. 260px buys about 104pt, which
+# is the size that was asked for. Below that, no title is the better answer
+# than a small one.
+MIN_CHIN_BAND = 260
+
 
 @dataclass(frozen=True)
 class Framing:
@@ -287,6 +297,7 @@ def title_band(
     mode: str,
     face_top: float | None,
     face_bottom: float | None = None,
+    caption_zone: tuple[int, int] | None = None,
 ) -> tuple[int, int] | None:
     """The vertical span, in output pixels, where a title may be drawn.
 
@@ -314,8 +325,20 @@ def title_band(
     # out of seven and shipped them with no headline at all -- the rule
     # meant to keep a title off a face was deciding there would be no
     # title. Below the chin is where the format puts its text anyway.
-    if face_bottom is not None:
-        floor = int(face_bottom * OUT_H) + TITLE_EDGE_MARGIN
-        if OUT_H - TITLE_EDGE_MARGIN - floor >= MIN_TITLE_BAND:
-            return floor, OUT_H - TITLE_EDGE_MARGIN
+    if face_bottom is None:
+        return None
+
+    floor = int(face_bottom * OUT_H) + TITLE_EDGE_MARGIN
+    ceiling = OUT_H - TITLE_EDGE_MARGIN
+    if caption_zone is not None:
+        cap_top, cap_bottom = caption_zone
+        # Between the chin and the captions if that fits -- it puts the
+        # title nearer the middle of the frame, where it is read first.
+        above = cap_top - TITLE_EDGE_MARGIN
+        if above - floor >= MIN_CHIN_BAND:
+            return floor, above
+        # Otherwise below the captions, never across them.
+        floor = max(floor, cap_bottom + TITLE_EDGE_MARGIN)
+    if ceiling - floor >= MIN_CHIN_BAND:
+        return floor, ceiling
     return None

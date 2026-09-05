@@ -34,11 +34,13 @@ DELAY=${DELAY:-0}
 # How long the machine is held up for this publish. Long enough to upload
 # and post, short enough that a crash here costs minutes, not a night.
 LEASE_MIN=${LEASE_MIN:-45}
-# The box's own remote name, which is not this machine's. Hard-coding "fork"
-# here failed silently: git printed its complaint, the script carried on
-# with the old checkout, and the flags it then passed did not exist.
-REMOTE=${REMOTE:-origin}
-BRANCH=${BRANCH:-hardening-and-llm-backends}
+# The box's own git remote name, which is not this machine's. Hard-coding
+# "fork" failed silently on a box whose remote is "origin". Named GIT_REMOTE
+# because REMOTE was already taken, further down, for the job directory on
+# the far side -- and calling it REMOTE meant git was handed a path to
+# /tmp/incoming and the publish never ran.
+GIT_REMOTE=${GIT_REMOTE:-origin}
+GIT_BRANCH=${GIT_BRANCH:-hardening-and-llm-backends}
 
 PROJECT=${PROJECT:-gen-lang-client-0653010260}
 ZONE=${ZONE:-europe-west9-a}
@@ -65,7 +67,7 @@ ssh_ "sudo sh -c 'date -d \"+${LEASE_MIN} min\" +%s > /opt/publikclip/keep-up-un
 # publish that fails on an unknown argument has already started the machine,
 # uploaded the clips and woken the operator.
 echo "== updating the checkout"
-ssh_ "sudo git config --global --add safe.directory /opt/publikclip/src;   sudo -u publikclip git -C /opt/publikclip/src fetch --quiet $REMOTE &&   sudo -u publikclip git -C /opt/publikclip/src checkout --quiet -B $BRANCH   $REMOTE/$BRANCH && sudo git -C /opt/publikclip/src log --oneline -1"
+ssh_ "sudo git config --global --add safe.directory /opt/publikclip/src;   sudo -u publikclip git -C /opt/publikclip/src fetch --quiet $GIT_REMOTE &&   sudo -u publikclip git -C /opt/publikclip/src checkout --quiet -B $GIT_BRANCH   $GIT_REMOTE/$GIT_BRANCH && sudo git -C /opt/publikclip/src log --oneline -1"
 
 echo "== shipping the job"
 ssh_ "mkdir -p $REMOTE/clips"
