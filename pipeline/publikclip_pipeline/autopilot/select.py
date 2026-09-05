@@ -85,15 +85,22 @@ class SelectedClip:
     def caption(self, limit: int = 180) -> str:
         """What the post should say, best available first.
 
-        The render stage's description is written to be read by an audience;
-        the scorer's summary is written to be read by whoever is deciding
-        whether to publish. Prefer the first and fall back to the second.
+        The render stage's description is written to be read by an
+        audience. The scorer's summary is not: it is written for whoever is
+        deciding whether to publish, in the third person and in English
+        whatever the clip speaks, and it went out as a caption on French
+        videos -- "The streamer panics, mentions going to the hospital".
+        Internal notes are not a fallback for a caption at any length.
+
+        The title is, though. It was written for the same audience, it is
+        already burned onto the video, and repeating it under the video is
+        what a person posting by hand would do.
 
         No hashtag padding and no invented hype either way: everything here
         was generated from the transcript, so it stays recognisable as a
         description of what actually happens.
         """
-        text = " ".join((self.description or self.summary).split())
+        text = " ".join((self.description or self.title or "").split())
         if len(text) <= limit:
             return text
         return text[: limit - 1].rsplit(" ", 1)[0] + "…"

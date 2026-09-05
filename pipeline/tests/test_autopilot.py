@@ -94,12 +94,27 @@ def test_the_summary_comes_from_the_matching_scored_clip(tmp_path):
 # --- captions -------------------------------------------------------------
 
 
-def test_caption_is_the_scorers_own_sentence():
-    assert _clip(summary="  a  funny   thing  ").caption() == "a funny thing"
+def test_caption_is_the_copy_written_for_an_audience():
+    assert _clip(description="  a  funny   thing  ").caption() == "a funny thing"
+
+
+def test_the_caption_never_carries_the_scorers_notes():
+    """The summary is written for whoever is deciding whether to publish --
+    third person, English whatever the clip speaks. It went out as a caption
+    on French videos. Internal notes are not a fallback."""
+    clip = _clip(summary="The streamer panics, mentions going to the hospital",
+                 description="", title="")
+    assert clip.caption() == ""
+
+
+def test_the_title_is_the_fallback_instead():
+    """It was written for the same audience and is already on the video."""
+    clip = _clip(summary="operator notes", description="", title="Un titre 😱")
+    assert clip.caption() == "Un titre 😱"
 
 
 def test_caption_truncates_on_a_word_boundary():
-    caption = _clip(summary="word " * 60).caption(limit=20)
+    caption = _clip(description="word " * 60).caption(limit=20)
     assert len(caption) <= 20
     assert caption.endswith("…")
     assert "wor…" not in caption, "cut mid-word"
@@ -358,7 +373,8 @@ def test_youtube_sends_every_required_field(monkeypatch):
     publisher, session = _wired(
         monkeypatch, {"YOUTUBE_MULTIPART_UPLOAD_VIDEO": {"data": {"id": "vid123"}}}
     )
-    result = publisher.publish(_clip(path="/tmp/a.mp4", summary="a long summary"), "youtube")
+    result = publisher.publish(
+        _clip(path="/tmp/a.mp4", description="a long description"), "youtube")
     assert result.ok and result.post_id == "vid123"
     assert result.url == "https://www.youtube.com/watch?v=vid123"
     args = session.calls[0][1]

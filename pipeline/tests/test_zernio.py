@@ -287,12 +287,24 @@ def test_hashtags_travel_with_the_post(monkeypatch, tmp_path):
     assert "#twitch" in fake.posts[0]["content"]
 
 
-def test_a_clip_with_no_generated_copy_falls_back_to_the_summary(monkeypatch, tmp_path):
-    # Half the clips get no title: no band free of faces, so no headline.
+def test_a_clip_with_no_caption_uses_its_title(monkeypatch, tmp_path):
+    """A clip can have no room to burn a headline and still have copy: the
+    band decides where a title may be drawn, not whether a post has text."""
+    fake = Fake().install(monkeypatch)
+    clip = a_clip(tmp_path, description="", hashtags=())
+    zernio.ZernioPublisher().publish(clip, "tiktok")
+    assert fake.posts[0]["content"] == "UN TITRE"
+
+
+def test_a_clip_with_no_copy_at_all_does_not_post_the_scorers_notes(
+    monkeypatch, tmp_path
+):
+    """"ce que dit le scorer" is written for an operator reading a report.
+    It was going out as the caption on published videos."""
     fake = Fake().install(monkeypatch)
     clip = a_clip(tmp_path, title="", description="", hashtags=())
     zernio.ZernioPublisher().publish(clip, "tiktok")
-    assert fake.posts[0]["content"] == "ce que dit le scorer"
+    assert "scorer" not in fake.posts[0]["content"]
 
 
 def test_the_post_names_the_right_account_for_the_platform(monkeypatch, tmp_path):

@@ -26,7 +26,7 @@ class RenderStage(Stage):
         from ..scoring import llm as llm_mod
         from ..scoring import rubric
         from ..autopilot import parts as parts_mod
-        from ..sources import naming
+        from ..sources import language, naming
         from . import ffmpeg_bin, renderer
 
         if not ffmpeg_bin.supports_captions():
@@ -116,7 +116,14 @@ class RenderStage(Stage):
             # own words name. The second list is what a title may claim.
             cast = list(ingest.get("cast") or [])
             named = naming.mentioned_in(spoken, cast)
-            if headline_client is not None and band:
+            # Copy is asked for whenever there is a model, not only when
+            # there is somewhere to burn a title. The band decides where a
+            # headline may be drawn -- it has nothing to say about the text
+            # of a post. Gating both on it meant a clip with no room for a
+            # title got no caption either, and publishing fell back to the
+            # scorer's summary: English, third person, written for whoever
+            # is deciding whether to publish. That went out as a caption.
+            if headline_client is not None:
                 try:
                     copy = headline_client.generate_json(
                         rubric.headline_prompt(
@@ -133,12 +140,25 @@ class RenderStage(Stage):
                     ctx.emit(-1, f"clip {i + 1}: no title ({err})")
 
             title = (copy.get("title") or "").strip() or None
+            if title and not band:
+                title = None  # nowhere to draw it; the caption still stands
             # The transcript spells names the way they were heard, and copy
             # written from it inherits every mishearing. The cast list is the
             # only ground truth for a spelling, so it is applied first --
             # before the check below, which would otherwise be judging a name
             # the model never chose.
             title = naming.correct_spelling(title, cast) if title else title
+            # The prompt asks for the transcript's language. Asking is not a
+            # guarantee, and copy in the wrong language reads as machine
+            # output to exactly the audience it is aimed at.
+            for key in ("title", "description"):
+                text = title if key == "title" else copy.get(key)
+                if text and language.mismatched(text, spoken):
+                    ctx.emit(-1, f"clip {i + 1}: {key} dropped, wrong language")
+                    if key == "title":
+                        title = None
+                    else:
+                        copy[key] = None
             for key in ("description",):
                 if copy.get(key):
                     copy[key] = naming.correct_spelling(copy[key], cast)
