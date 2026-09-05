@@ -373,11 +373,63 @@ def test_a_chin_low_in_frame_leaves_too_little():
     assert framing.title_band("vertical", 0.064, 0.924) is None
 
 
-def test_the_band_under_the_chin_clears_the_minimum():
-    """Clip 2: 87.0% down leaves 170 pixels, which is a band."""
-    band = framing.title_band("vertical", 0.101, 0.870)
+def test_a_chin_band_too_small_to_read_is_no_band():
+    """Clip 2: 87.0% down leaves 170 pixels. Rendered, that was two lines
+    of about 68px sitting on the bottom edge — caption-sized, reading as a
+    watermark rather than a headline. No title beats a small one."""
+    assert framing.title_band("vertical", 0.101, 0.870) is None
+
+
+# --- and out of the captions ---------------------------------------------
+#
+# The first title placed under a chin landed on top of the subtitles. In
+# wide mode the title lives in the letterbox bar and the captions in the
+# picture, so they never meet; under a chin they do. The zone comes from
+# the captions module, which owns the geometry.
+
+CAPS = ass_mod.caption_zone("classic")   # (1180, 1360) for the default preset
+
+
+def test_the_measured_collision_no_longer_happens():
+    """Clip 8: face ends at 50.7%, so the band started at 1013 and the
+    title hung down across captions drawn from 1180."""
+    band = framing.title_band("vertical", 0.077, 0.507, caption_zone=CAPS)
     assert band is not None
-    assert band[1] - band[0] >= framing.MIN_TITLE_BAND
+    top, bottom = band
+    cap_top, cap_bottom = CAPS
+    assert top >= cap_bottom or bottom <= cap_top, "the title crosses the captions"
+
+
+def test_a_title_goes_above_the_captions_when_it_fits():
+    """Nearer the middle of the frame is read first, so the gap between
+    chin and captions is preferred over the strip beneath them."""
+    band = framing.title_band("vertical", 0.05, 0.20, caption_zone=CAPS)
+    assert band is not None
+    assert band[1] <= CAPS[0], "should sit above the caption zone"
+
+
+def test_a_low_chin_pushes_the_title_below_the_captions():
+    band = framing.title_band("vertical", 0.077, 0.507, caption_zone=CAPS)
+    assert band is not None and band[0] >= CAPS[1]
+
+
+def test_without_a_caption_zone_the_old_answer_stands():
+    """Callers that do not know about captions must not silently lose the
+    band; they get the same geometry as before."""
+    assert framing.title_band("vertical", 0.077, 0.507) is not None
+
+
+def test_the_caption_zone_sits_where_the_style_puts_it():
+    """Alignment 2 with margin_v of clear space beneath: the bottom of the
+    zone is margin_v up from the frame bottom."""
+    from publikclip_pipeline.captions.ass import PRESETS, PLAY_RES_Y
+    top, bottom = ass_mod.caption_zone("classic")
+    assert bottom == PLAY_RES_Y - PRESETS["classic"].margin_v
+    assert top < bottom
+
+
+def test_an_unknown_preset_falls_back_rather_than_raising():
+    assert ass_mod.caption_zone("nexistepas") == ass_mod.caption_zone("classic")
 
 
 def test_without_a_chin_measurement_nothing_changes():
