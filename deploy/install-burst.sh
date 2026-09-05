@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Install the burst service on this machine. Run once, as root, on the VM.
 #
-# Two independent guarantees that the machine powers off, because the whole
-# point is not paying for a box that is idle or wedged:
+# Two guarantees that the machine powers off, because the whole point is not
+# paying for a box that is idle or wedged:
 #
-#   1. systemd RuntimeMaxSec kills the burst at the deadline, and burst.sh's
-#      EXIT trap powers off on the way out — including when it is killed.
+#   1. systemd TimeoutStartSec kills the burst at the deadline, and
+#      burst.sh's EXIT trap powers off on the way out — including when it is
+#      killed. It was RuntimeMaxSec, which systemd ignores for Type=oneshot
+#      and said so in the journal on every boot: "RuntimeMaxSec= has no
+#      effect in combination with Type=oneshot. Ignoring." A guarantee that
+#      announces its own absence once a day is worse than no guarantee,
+#      because it was counted.
 #   2. A `shutdown` armed from the boot itself, as a backstop for the case
-#      where the service never starts or systemd itself is unhappy. It is
-#      cancelled only by the pause flag.
+#      where the service never starts or systemd itself is unhappy.
+#
+# Both are now armed unconditionally. Previously both, plus burst.sh's own
+# power-off, were gated on one file — so they were not independent at all,
+# and one stray flag kept the machine up for six hours. Only a lease with a
+# deadline holds the machine now, and it expires by itself.
 #
 # Nothing here starts the machine. That cannot come from inside a box that
 # is off — see the instance schedule in README.md.
@@ -54,7 +63,9 @@ EnvironmentFile=-${APP}/burst.env
 ExecStart=/usr/local/bin/publikclip-burst
 # The deadline is a cost control, not a performance target. On expiry
 # systemd kills the process and burst.sh's EXIT trap still powers off.
-RuntimeMaxSec=${BUDGET_SEC}
+# TimeoutStartSec, not RuntimeMaxSec: for Type=oneshot the whole run counts
+# as start-up, and RuntimeMaxSec is ignored outright.
+TimeoutStartSec=${BUDGET_SEC}
 TimeoutStopSec=120
 StandardOutput=journal
 StandardError=journal
@@ -71,8 +82,12 @@ After=multi-user.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# If the pause flag is set, someone is working on the machine: leave it up.
-ExecStart=/bin/bash -c '[ -e ${APP}/no-burst ] || /sbin/shutdown -h +${BACKSTOP_MIN} "publikclip backstop: nothing should keep this machine up"'
+# Armed on every boot, no exceptions. Whoever wants the machine to stay up
+# takes a lease and cancels this themselves; a lease that runs out lets the
+# next boot arm it again. The old version skipped arming whenever a pause
+# flag existed, which made the backstop depend on exactly the thing it was
+# supposed to back up.
+ExecStart=/bin/bash -c '/sbin/shutdown -h +${BACKSTOP_MIN} "publikclip backstop: nothing should keep this machine up"'
 ExecStop=/sbin/shutdown -c
 
 [Install]
@@ -87,5 +102,9 @@ echo "  settings     : ${APP}/burst.env"
 echo "  burst budget : ${BUDGET_SEC}s"
 echo "  backstop     : shutdown +${BACKSTOP_MIN}min from boot"
 echo
-echo "pause both (to work on the machine):  sudo touch ${APP}/no-burst && sudo shutdown -c"
-echo "resume:                               sudo rm ${APP}/no-burst"
+echo "do no work this boot :  sudo touch ${APP}/no-burst      (still powers off)"
+echo "keep it up 60 min    :  sudo sh -c 'date -d \"+60 min\" +%s > ${APP}/keep-up-until' && sudo shutdown -c"
+echo "release early        :  sudo rm -f ${APP}/keep-up-until"
+echo
+echo "A lease expires on its own. That is the point: forgetting a flag is free,"
+echo "forgetting a running VM is not."

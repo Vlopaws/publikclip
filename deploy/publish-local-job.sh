@@ -31,6 +31,9 @@ ONLY=${ONLY:-}
 # files and create the posts -- not until they go out.
 STAGGER=${STAGGER:-0}
 DELAY=${DELAY:-0}
+# How long the machine is held up for this publish. Long enough to upload
+# and post, short enough that a crash here costs minutes, not a night.
+LEASE_MIN=${LEASE_MIN:-45}
 
 PROJECT=${PROJECT:-gen-lang-client-0653010260}
 ZONE=${ZONE:-europe-west9-a}
@@ -46,8 +49,12 @@ g compute instances start "$NAME" --zone "$ZONE" >/dev/null
 # Give sshd a moment; the start call returns before the box answers.
 until ssh_ "true" 2>/dev/null; do sleep 10; done
 
-echo "== pausing the burst schedule while we work"
-ssh_ "sudo touch /opt/publikclip/no-burst && sudo shutdown -c 2>/dev/null; true"
+# A lease, not a flag. The flag this used to set stopped the burst AND every
+# power-off path, and one left behind kept the machine up for six hours. A
+# lease expires whether or not this script reaches its last line -- which
+# matters most exactly when it does not.
+echo "== taking a ${LEASE_MIN}min lease on the machine"
+ssh_ "sudo sh -c 'date -d \"+${LEASE_MIN} min\" +%s > /opt/publikclip/keep-up-until'   && sudo touch /opt/publikclip/no-burst && sudo shutdown -c 2>/dev/null; true"
 
 # The flags this script passes have to exist on the box that runs them. A
 # publish that fails on an unknown argument has already started the machine,
@@ -86,7 +93,7 @@ ssh_ "sudo -u publikclip HOME=/opt/publikclip /opt/publikclip/.local/bin/uv \
   ${ONLY:+--only '$ONLY'}" || \
   echo "!! publishing reported a failure; the machine is still stopped below"
 
-echo "== lifting the pause and stopping"
-ssh_ "sudo rm -f /opt/publikclip/no-burst" || true
+echo "== releasing the lease and stopping"
+ssh_ "sudo rm -f /opt/publikclip/keep-up-until /opt/publikclip/no-burst" || true
 g compute instances stop "$NAME" --zone "$ZONE" >/dev/null
 echo "== $NAME stopped"

@@ -54,17 +54,41 @@ MIN_SCORE=${MIN_SCORE:-30}
 # Keep at least this much of the burst budget in reserve for shutting down.
 POWEROFF=${POWEROFF:-1}
 
+# Staying up is a lease with a deadline, not a flag.
+#
+# $PAUSE used to mean two things at once -- do no work, and do not power
+# off -- and the backstop unit read the same file, so one stray file
+# disabled every power-off path there was. They were never four independent
+# guarantees; they were four readings of one condition. Measured: a flag
+# left behind after a publish kept this machine up for six hours after a
+# boot on which it did nothing at all.
+#
+# "Do no work" stays a flag: forgetting it costs nothing. "Stay up" is a
+# lease, because forgetting it costs money by the hour, so it has to expire
+# without anyone remembering.
+LEASE=$APP/keep-up-until
+
+lease_valid() {
+  local until
+  [ -r "$LEASE" ] || return 1
+  until=$(cat "$LEASE" 2>/dev/null) || return 1
+  case "$until" in ""|*[!0-9]*) return 1 ;; esac
+  [ "$(date +%s)" -lt "$until" ]
+}
+
 say() { echo "[$(date -Is)] $*" | tee -a "$LOG"; }
 
 finish() {
   local code=$?
   say "burst ended (exit $code)"
-  if [ "$POWEROFF" = "1" ] && [ ! -e "$PAUSE" ]; then
+  if [ "$POWEROFF" != "1" ]; then
+    say "poweroff suppressed (POWEROFF=$POWEROFF)"
+  elif lease_valid; then
+    say "poweroff held until $(date -Is -d "@$(cat "$LEASE")") by $LEASE"
+  else
     say "powering off"
     sync
     systemctl poweroff --no-block || poweroff || shutdown -h now
-  else
-    say "poweroff suppressed (POWEROFF=$POWEROFF, pause=$([ -e "$PAUSE" ] && echo yes || echo no))"
   fi
 }
 trap finish EXIT
@@ -94,9 +118,9 @@ metadata_says_off() {
 }
 
 if [ -e "$PAUSE" ] || metadata_says_off; then
-  # Must not power off: these flags exist so a person can work on the
-  # machine without it vanishing underneath them.
-  POWEROFF=0
+  # Do no work -- and still power off on the way out, unless someone holds
+  # a lease. A boot that does nothing is the cheapest thing this machine can
+  # do only if it also ends.
   if [ -e "$PAUSE" ]; then
     say "paused by $PAUSE — doing nothing"
   else
