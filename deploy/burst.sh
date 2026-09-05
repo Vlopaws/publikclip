@@ -68,12 +68,35 @@ POWEROFF=${POWEROFF:-1}
 # without anyone remembering.
 LEASE=$APP/keep-up-until
 
+# A lease can also be granted before the machine exists, for the same
+# reason the pause can: an on-disk lease has to be written by someone
+# already on the machine, and getting on the machine means starting it,
+# which starts this -- which powers off seconds later, before any ssh
+# completes. Measured three times in a row: pause the burst by metadata,
+# boot, and the trap below powers off while the tunnel is still opening.
+# The work flag learned this; the lease had not.
+#
+# Minutes from boot, so it expires on its own even if nobody clears it.
+metadata_lease_minutes() {
+  local value
+  value=$(curl -fsS --max-time 5     -H "Metadata-Flavor: Google"     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/publikclip-lease-minutes"     2>/dev/null) || return 1
+  case "$value" in ""|*[!0-9]*) return 1 ;; esac
+  [ "$value" -gt 0 ] || return 1
+  echo "$value"
+}
+
 lease_valid() {
-  local until
-  [ -r "$LEASE" ] || return 1
-  until=$(cat "$LEASE" 2>/dev/null) || return 1
-  case "$until" in ""|*[!0-9]*) return 1 ;; esac
-  [ "$(date +%s)" -lt "$until" ]
+  local until minutes uptime
+  if [ -r "$LEASE" ]; then
+    until=$(cat "$LEASE" 2>/dev/null) || until=""
+    case "$until" in
+      ""|*[!0-9]*) : ;;
+      *) [ "$(date +%s)" -lt "$until" ] && return 0 ;;
+    esac
+  fi
+  minutes=$(metadata_lease_minutes) || return 1
+  uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null) || return 1
+  [ "$uptime" -lt "$((minutes * 60))" ]
 }
 
 say() { echo "[$(date -Is)] $*" | tee -a "$LOG"; }
