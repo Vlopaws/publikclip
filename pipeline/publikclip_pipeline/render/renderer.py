@@ -231,8 +231,23 @@ def verify_output(out_path: Path, expected_duration: float) -> dict:
     has_a = any(s.get("codec_type") == "audio" for s in streams)
     duration = float(info.get("format", {}).get("duration", 0.0))
     video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    # Say which check failed, not just what the file looks like. The old
+    # report -- "failed verification (duration 27.1s, 1080x1920)" -- printed
+    # two numbers that were both fine and named neither the expected
+    # duration nor the missing stream, so a duration mismatch read as a
+    # dimension problem and cost an afternoon.
+    problems = []
+    if not has_v:
+        problems.append("no video stream")
+    if not has_a:
+        problems.append("no audio stream")
+    if abs(duration - expected_duration) >= 1.5:
+        problems.append(
+            f"duration {duration:.1f}s, expected {expected_duration:.1f}s"
+        )
     return {
-        "ok": has_v and has_a and abs(duration - expected_duration) < 1.5,
+        "ok": not problems,
+        "problems": problems,
         "duration": duration,
         "width": video.get("width"),
         "height": video.get("height"),

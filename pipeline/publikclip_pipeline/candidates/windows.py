@@ -154,8 +154,15 @@ def window_around(
         # try extending the end to the next sentence end
         later = seg_ends[seg_ends > start + MIN_LEN]
         if len(later) == 0:
-            return None
-        end = float(later[0])
+            # None is far enough out, and on a source shorter than MIN_LEN
+            # there never will be one. Giving up here dropped every Twitch
+            # clip under fifteen seconds and, worse, every clip whose last
+            # sentence ended early -- returning nothing rather than the
+            # material that plainly exists. Take what there is, bounded by
+            # the media and by MAX_LEN.
+            end = min(duration, start + MAX_LEN)
+        else:
+            end = float(later[0])
         length = end - start
     if length > MAX_LEN:
         earlier = seg_ends[(seg_ends > start + MIN_LEN) & (seg_ends <= start + MAX_LEN)]
@@ -163,10 +170,34 @@ def window_around(
             return None
         end = float(earlier[-1])
 
+    # Harder than every rule above: a window cannot contain footage that
+    # does not exist.
+    #
+    # raw_end is clamped to the media, and then _snap moves the edge to the
+    # nearest sentence end -- which can sit past the end of the audio,
+    # because Whisper pads its last segment. Nothing re-clamped. Measured on
+    # a 27.084-second Twitch clip: the window came out 0.0-30.0, ffmpeg
+    # produced the 27.1 seconds that exist, and the render's duration check
+    # rejected the clip for being 2.9 seconds short of a length no cut could
+    # ever have reached. The clip was fine. Short sources are the whole of
+    # this operation's Twitch input, so this failed constantly and silently.
+    end = min(end, duration)
+    if end - start < MIN_LEN:
+        # Pull the start back rather than give up. When even the whole
+        # source is under MIN_LEN, the whole source is what there is: a
+        # 27-second clip is not too short to post, and refusing it leaves
+        # nothing at all.
+        start = max(0.0, end - MIN_LEN)
+    if end <= start:
+        return None
+
     # Last, so it cannot be undone by the length adjustments above.
     if cuts is not None:
         start, end = _clear_of_cuts(start, end, cuts)
-        if end - start < MIN_LEN:
+        end = min(end, duration)
+        if end - start < MIN_LEN and (start > 0.0 or end < duration):
+            return None
+        if end <= start:
             return None
     return (round(start, 3), round(end, 3))
 

@@ -202,8 +202,9 @@ class RenderStage(Stage):
             check = renderer.verify_output(out_path, end - start)
             if not check["ok"]:
                 raise StageError(
-                    f"Clip {i} failed verification (duration {check['duration']:.1f}s, "
-                    f"{check['width']}x{check['height']})."
+                    f"Clip {i} failed verification: "
+                    f"{'; '.join(check.get('problems') or ['unknown'])} "
+                    f"({check['width']}x{check['height']})."
                 )
             outputs.append(
                 {
