@@ -99,7 +99,21 @@ lease_valid() {
   [ "$uptime" -lt "$((minutes * 60))" ]
 }
 
-say() { echo "[$(date -Is)] $*" | tee -a "$LOG"; }
+# The log also goes to the serial console, which is the only place it can
+# be read from afterwards.
+#
+# This machine's whole design is that it powers itself off, and a machine
+# that is off cannot be sshed into. Every question about a burst -- did it
+# find clips, did the pull fail, why did it last ninety seconds -- was
+# therefore unanswerable by the time it could be asked, and asking meant
+# booting again, which started another burst and overwrote the evidence.
+# Serial output survives the power-off and is read from outside with
+# `gcloud compute instances get-serial-port-output`.
+say() {
+  local line="[$(date -Is)] $*"
+  echo "$line" | tee -a "$LOG"
+  echo "publikclip: $line" > /dev/console 2>/dev/null || true
+}
 
 finish() {
   local code=$?
@@ -160,6 +174,7 @@ run() {
 }
 
 # Pull the day's code first: a burst is also how a fix reaches production.
+say "on HEAD $(git -C "$APP/src" rev-parse --short HEAD 2>/dev/null), pulling"
 sudo -u publikclip git -C "$APP/src" pull --ff-only -q 2>&1 | tee -a "$LOG" || \
   say "git pull failed, running the version already here"
 say "version: $(sudo -u publikclip git -C "$APP/src" log --oneline -1)"
